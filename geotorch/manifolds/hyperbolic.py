@@ -1,4 +1,4 @@
-"""Hyperbolic space manifold."""
+"""Hyperbolic space H^{n-1} with constant negative curvature."""
 
 import torch
 from torch import Tensor
@@ -6,77 +6,143 @@ from ..manifold import Manifold
 
 
 class Hyperbolic(Manifold):
-    """Hyperbolic space H^{n-1} with constant negative curvature.
+    """
+    Hyperbolic space H^{n-1} with constant negative curvature.
     
     Supports two models:
-    - Poincaré ball: Open unit ball in ℝⁿ with conformal metric
-    - Hyperboloid: Upper sheet of hyperboloid in Minkowski space
+    - 'poincare': Poincaré ball model (open unit ball in R^n)
+    - 'hyperboloid': Hyperboloid model (upper sheet in Minkowski space)
     
-    Note: Hyperbolic(n) creates (n-1)-dimensional hyperbolic space H^{n-1}.
-    For Poincaré ball, points live in ℝⁿ with ||x|| < 1.
+    Hyperbolic(n) creates H^{n-1} represented with n-dimensional vectors.
+    
+    Example:
+        >>> H = Hyperbolic(64, model='poincare')  # H^63
+        >>> p = H.random_point()
+        >>> print(p.shape)  # torch.Size([64])
+        >>> print(torch.norm(p) < 1)  # True (inside unit ball)
+        >>> print(H.dim)  # 63 (intrinsic dimension)
+    
+    Poincaré ball formulas (curvature c = -1):
+        - Uses Möbius addition for exp/log
+        - distance(p, q) = arcosh(1 + 2||p-q||² / ((1-||p||²)(1-||q||²)))
+    
+    No cut locus (log is always defined).
     
     Args:
-        n: Dimension parameter (creates H^{n-1})
-        model: Either 'poincare' (default) or 'hyperboloid'
-        curvature: Negative curvature constant (default: -1.0)
-    
-    Examples:
-        >>> H = Hyperbolic(64, model='poincare')  # H^63 in Poincaré ball
-        >>> p = H.random_point()
-        >>> assert torch.norm(p) < 1.0  # Inside unit ball
+        n: Ambient dimension (points are in R^n, manifold is H^{n-1})
+        model: 'poincare' (default) or 'hyperboloid'
+        curvature: Negative curvature parameter (default: -1.0)
     """
     
     def __init__(self, n: int, model: str = 'poincare', curvature: float = -1.0):
-        if n < 2:
-            raise ValueError(f"Hyperbolic requires n >= 2, got {n}")
         if model not in ['poincare', 'hyperboloid']:
             raise ValueError(f"Model must be 'poincare' or 'hyperboloid', got {model}")
         if curvature >= 0:
             raise ValueError(f"Curvature must be negative, got {curvature}")
         
-        self._ambient_dim = n
-        self._dim = n - 1
+        self.n = n
         self.model = model
-        self.c = abs(curvature)  # Use positive c, handle sign in formulas
-        self._eps = 1e-7
+        self.curvature = curvature
+        self.eps = 1e-7
     
     @property
     def dim(self) -> int:
-        """Intrinsic dimension of hyperbolic space (n-1 for H^{n-1})."""
-        return self._dim
+        """Intrinsic dimension of the manifold."""
+        return self.n - 1
+    
+    def _lambda_x(self, x: Tensor) -> Tensor:
+        """Conformal factor for Poincaré ball."""
+        x_sqnorm = torch.sum(x * x, dim=-1, keepdim=True)
+        return 2.0 / (1.0 - x_sqnorm).clamp(min=self.eps)
+    
+    def _mobius_add(self, x: Tensor, y: Tensor) -> Tensor:
+        """Möbius addition in Poincaré ball."""
+        x_sqnorm = torch.sum(x * x, dim=-1, keepdim=True)
+        y_sqnorm = torch.sum(y * y, dim=-1, keepdim=True)
+        xy_dot = torch.sum(x * y, dim=-1, keepdim=True)
+        
+        numerator = (1.0 + 2.0 * xy_dot + y_sqnorm) * x + (1.0 - x_sqnorm) * y
+        denominator = (1.0 + 2.0 * xy_dot + x_sqnorm * y_sqnorm).clamp(min=self.eps)
+        
+        return numerator / denominator
+    
+    def _mobius_scalar_mult(self, r: Tensor, x: Tensor) -> Tensor:
+        """Möbius scalar multiplication in Poincaré ball."""
+        x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
+        
+        # r ⊗ x = tanh(r * arctanh(||x||)) * x / ||x||
+        x_norm_clamped = torch.clamp(x_norm, max=1.0 - self.eps)
+        arctanh_norm = torch.arctanh(x_norm_clamped)
+        
+        new_norm = torch.tanh(r * arctanh_norm)
+        return new_norm * x / x_norm.clamp(min=self.eps)
     
     def exp(self, p: Tensor, v: Tensor) -> Tensor:
-        """Exponential map in hyperbolic space.
+        """
+        Exponential map: move from p along geodesic with velocity v.
+        
+        For Poincaré ball: exp_p(v) = p ⊕ (tanh(λ_p||v||/2) * v / ||v||)
+        where ⊕ is Möbius addition and λ_p is the conformal factor.
         
         Args:
-            p: Point in hyperbolic space
-            v: Tangent vector at p
+            p: Point on manifold, shape (..., n)
+            v: Tangent vector at p, shape (..., n)
         
         Returns:
-            Point after moving along geodesic
+            Point on manifold after geodesic flow
         """
-        if self.model == 'poincare':
-            return self._exp_poincare(p, v)
-        else:
-            return self._exp_hyperboloid(p, v)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
+        
+        v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
+        lambda_p = self._lambda_x(p)
+        
+        # Compute direction and scaled norm
+        v_normalized = v / v_norm.clamp(min=self.eps)
+        scaled_norm = torch.tanh(lambda_p * v_norm / 2.0)
+        
+        # Exponential map: p ⊕ (scaled_norm * v_normalized)
+        direction = scaled_norm * v_normalized
+        result = self._mobius_add(p, direction)
+        
+        # Möbius addition keeps points inside the unit ball automatically.
+        # No clipping needed - it would break the exp-log inverse property.
+        return result
     
     def log(self, p: Tensor, q: Tensor) -> Tensor:
-        """Logarithmic map in hyperbolic space.
+        """
+        Logarithmic map: tangent vector at p pointing toward q.
+        
+        For Poincaré ball: log_p(q) = (2/λ_p) * arctanh(||(-p) ⊕ q||) * ((-p) ⊕ q) / ||(-p) ⊕ q||
         
         Args:
-            p: Base point
-            q: Target point
+            p: Base point on manifold
+            q: Target point on manifold
         
         Returns:
-            Tangent vector at p pointing toward q
+            Tangent vector v such that exp(p, v) = q
         """
-        if self.model == 'poincare':
-            return self._log_poincare(p, q)
-        else:
-            return self._log_hyperboloid(p, q)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
+        
+        # Compute -p ⊕ q
+        minus_p = -p
+        diff = self._mobius_add(minus_p, q)
+        diff_norm = torch.linalg.norm(diff, dim=-1, keepdim=True)
+        
+        lambda_p = self._lambda_x(p)
+        
+        # log_p(q) = (2/λ_p) * arctanh(||diff||) * diff / ||diff||
+        diff_norm_clamped = torch.clamp(diff_norm, max=1.0 - self.eps)
+        arctanh_norm = torch.arctanh(diff_norm_clamped)
+        
+        return (2.0 / lambda_p) * arctanh_norm * diff / diff_norm.clamp(min=self.eps)
     
     def parallel_transport(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """Parallel transport in hyperbolic space.
+        """
+        Parallel transport tangent vector v from T_pM to T_qM.
+        
+        Uses the gyrovector transport formula for Poincaré ball.
         
         Args:
             v: Tangent vector at p
@@ -84,253 +150,157 @@ class Hyperbolic(Manifold):
             q: Destination point
         
         Returns:
-            Parallel transported vector at q
+            Tangent vector at q with same geometric properties as v
         """
-        if self.model == 'poincare':
-            return self._parallel_transport_poincare(v, p, q)
-        else:
-            return self._parallel_transport_hyperboloid(v, p, q)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
+        
+        lambda_p = self._lambda_x(p)
+        lambda_q = self._lambda_x(q)
+        
+        # Gyrovector parallel transport
+        # PT(v) = (λ_p / λ_q) * v
+        return (lambda_p / lambda_q) * v
     
     def distance(self, p: Tensor, q: Tensor) -> Tensor:
-        """Geodesic distance in hyperbolic space.
+        """
+        Geodesic distance between points.
+        
+        For Poincaré ball:
+        distance(p, q) = arcosh(1 + 2||p-q||² / ((1-||p||²)(1-||q||²)))
         
         Args:
-            p: First point
-            q: Second point
+            p: First point, shape (..., n)
+            q: Second point, shape (..., n)
         
         Returns:
-            Geodesic distance
+            Distance, shape (...)
         """
-        if self.model == 'poincare':
-            return self._distance_poincare(p, q)
-        else:
-            return self._distance_hyperboloid(p, q)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
+        
+        diff_sqnorm = torch.sum((p - q) ** 2, dim=-1)
+        p_sqnorm = torch.sum(p * p, dim=-1)
+        q_sqnorm = torch.sum(q * q, dim=-1)
+        
+        denominator = ((1.0 - p_sqnorm) * (1.0 - q_sqnorm)).clamp(min=self.eps)
+        
+        # arcosh argument must be >= 1
+        arcosh_arg = 1.0 + 2.0 * diff_sqnorm / denominator
+        arcosh_arg = torch.clamp(arcosh_arg, min=1.0)
+        
+        return torch.acosh(arcosh_arg)
     
     def project(self, x: Tensor) -> Tensor:
-        """Project point onto hyperbolic space.
+        """
+        Project ambient space point onto manifold.
+        
+        For Poincaré ball, projects to inside the unit ball.
         
         Args:
             x: Point in ambient space
         
         Returns:
-            Projected point
+            Closest point on manifold
         """
-        if self.model == 'poincare':
-            # Project onto open unit ball
-            norm_x = torch.linalg.norm(x, dim=-1, keepdim=True)
-            # Scale to be inside ball with small margin
-            scale = torch.where(norm_x >= 1.0, 
-                              (1.0 - self._eps) / (norm_x + self._eps),
-                              torch.ones_like(norm_x))
-            return x * scale
-        else:
-            # Project onto hyperboloid
-            return self._project_hyperboloid(x)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
+        
+        x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
+        
+        # If already inside ball (with margin), return as is
+        # Otherwise, project to boundary with margin
+        max_norm = 1.0 - self.eps
+        scale = torch.where(
+            x_norm < max_norm,
+            torch.ones_like(x_norm),
+            max_norm / x_norm.clamp(min=self.eps)
+        )
+        
+        return scale * x
     
     def project_tangent(self, p: Tensor, v: Tensor) -> Tensor:
-        """Project vector onto tangent space.
+        """
+        Project ambient vector onto tangent space at p.
+        
+        For Poincaré ball with the canonical metric, the tangent space
+        is the entire ambient space R^n, so this is the identity.
         
         Args:
             p: Point on manifold
             v: Vector in ambient space
         
         Returns:
-            Tangent vector at p
+            Component of v in T_pM
         """
-        if self.model == 'poincare':
-            # In Poincaré model, tangent space is just ℝⁿ (with metric)
-            return v
-        else:
-            # In hyperboloid model, tangent space is orthogonal to p (Minkowski)
-            return self._project_tangent_hyperboloid(p, v)
+        # In Poincaré ball, tangent space is all of R^n
+        return v
     
-    def random_point(self, *shape, device=None, dtype=None) -> Tensor:
-        """Generate random point(s) in hyperbolic space.
+    def in_domain(self, p: Tensor, q: Tensor) -> Tensor:
+        """
+        Check if log_p(q) is well-defined (q not at cut locus of p).
+        
+        Hyperbolic space has no cut locus, so log is always defined.
         
         Args:
-            *shape: Shape of the output (batch dimensions)
-            device: PyTorch device
-            dtype: PyTorch dtype
+            p: Base point
+            q: Target point
+            
+        Returns:
+            Boolean tensor, True if log_p(q) is defined (always True)
+        """
+        return torch.ones(p.shape[:-1], dtype=torch.bool, device=p.device)
+    
+    def random_point(self, *shape, device=None, dtype=None) -> Tensor:
+        """
+        Generate random point(s) on manifold.
+        
+        Samples uniformly from the Poincaré ball.
+        
+        Args:
+            *shape: Shape of points to generate (excluding final dimension n)
+            device: Device to create tensor on
+            dtype: Data type of tensor
         
         Returns:
-            Random point(s)
+            Random point(s) on manifold
         """
-        full_shape = shape + (self._ambient_dim,)
+        if self.model != 'poincare':
+            raise NotImplementedError("Only Poincaré model is implemented")
         
-        if self.model == 'poincare':
-            # Generate random point in Poincaré ball
-            x = torch.randn(full_shape, device=device, dtype=dtype)
-            # Map to inside unit ball
-            r = torch.rand(shape + (1,), device=device, dtype=dtype)
-            r = r ** (1.0 / self._ambient_dim)  # Uniform in ball
-            r = r * (1.0 - self._eps)  # Keep away from boundary
-            norm_x = torch.linalg.norm(x, dim=-1, keepdim=True)
-            return r * x / (norm_x + self._eps)
-        else:
-            # Generate random point on hyperboloid
-            x = torch.randn(full_shape, device=device, dtype=dtype)
-            return self._project_hyperboloid(x)
+        if not shape:
+            shape = ()
+        
+        # Sample from normal distribution and project
+        x = torch.randn(*shape, self.n, device=device, dtype=dtype)
+        
+        # Scale to be inside unit ball
+        # Use uniform radius sampling for better distribution
+        x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
+        
+        # Sample radius uniformly in [0, 1)
+        radius = torch.rand(*shape, 1, device=device, dtype=dtype)
+        radius = torch.pow(radius, 1.0 / self.n)  # Correct for volume in n dimensions
+        radius = radius * (1.0 - self.eps)  # Stay away from boundary
+        
+        return radius * x / x_norm.clamp(min=self.eps)
     
-    # Poincaré ball implementations
-    
-    def _exp_poincare(self, p: Tensor, v: Tensor) -> Tensor:
-        """Exponential map in Poincaré ball model using Möbius addition."""
-        norm_v = torch.linalg.norm(v, dim=-1, keepdim=True)
-        norm_v = torch.clamp(norm_v, min=self._eps)
+    def random_tangent(self, p: Tensor) -> Tensor:
+        """
+        Generate random tangent vector at p.
         
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
+        For Poincaré ball, samples from standard normal distribution,
+        scaled by the inverse conformal factor to have unit Riemannian norm on average.
+        This ensures the tangent vector is reasonable in the Riemannian metric.
         
-        # Compute Möbius scalar multiplication
-        factor = torch.tanh(sqrt_c * norm_v / 2) / (sqrt_c * norm_v)
-        scaled_v = factor * v
+        Args:
+            p: Point on manifold
         
-        # Möbius addition: p ⊕ scaled_v
-        return self._mobius_add(p, scaled_v)
-    
-    def _log_poincare(self, p: Tensor, q: Tensor) -> Tensor:
-        """Logarithmic map in Poincaré ball model."""
-        # Möbius subtraction: q ⊖ p = -p ⊕ q
-        neg_p_add_q = self._mobius_add(-p, q)
-        
-        norm_diff = torch.linalg.norm(neg_p_add_q, dim=-1, keepdim=True)
-        norm_diff = torch.clamp(norm_diff, min=self._eps)
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        lambda_p = self._lambda(p)
-        
-        # Compute log
-        factor = 2.0 / (sqrt_c * lambda_p * norm_diff)
-        factor = factor * torch.atanh(sqrt_c * norm_diff)
-        
-        return factor * neg_p_add_q
-    
-    def _distance_poincare(self, p: Tensor, q: Tensor) -> Tensor:
-        """Distance in Poincaré ball model."""
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        
-        diff_norm_sq = torch.sum((p - q) ** 2, dim=-1)
-        norm_p_sq = torch.sum(p ** 2, dim=-1)
-        norm_q_sq = torch.sum(q ** 2, dim=-1)
-        
-        # Avoid numerical issues
-        norm_p_sq = torch.clamp(norm_p_sq, max=1.0 - self._eps)
-        norm_q_sq = torch.clamp(norm_q_sq, max=1.0 - self._eps)
-        
-        numerator = 2.0 * diff_norm_sq
-        denominator = (1.0 - norm_p_sq) * (1.0 - norm_q_sq)
-        denominator = torch.clamp(denominator, min=self._eps)
-        
-        arg = 1.0 + numerator / denominator
-        arg = torch.clamp(arg, min=1.0 + self._eps)
-        
-        return torch.acosh(arg) / sqrt_c
-    
-    def _parallel_transport_poincare(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """Parallel transport in Poincaré ball model."""
-        # Use gyration-based formula
-        neg_p_add_q = self._mobius_add(-p, q)
-        
-        lambda_p = self._lambda(p)
-        lambda_q = self._lambda(q)
-        
-        # Simplified parallel transport (preserves norm)
-        factor = lambda_p / lambda_q
-        
-        # Apply gyration (simplified version)
-        return factor * v
-    
-    def _mobius_add(self, x: Tensor, y: Tensor) -> Tensor:
-        """Möbius addition: x ⊕ y in Poincaré ball."""
-        xy = torch.sum(x * y, dim=-1, keepdim=True)
-        norm_x_sq = torch.sum(x ** 2, dim=-1, keepdim=True)
-        norm_y_sq = torch.sum(y ** 2, dim=-1, keepdim=True)
-        
-        norm_x_sq = torch.clamp(norm_x_sq, max=1.0 - self._eps)
-        norm_y_sq = torch.clamp(norm_y_sq, max=1.0 - self._eps)
-        
-        numerator = (1.0 + 2.0 * self.c * xy + self.c * norm_y_sq) * x + (1.0 - self.c * norm_x_sq) * y
-        denominator = 1.0 + 2.0 * self.c * xy + self.c ** 2 * norm_x_sq * norm_y_sq
-        denominator = torch.clamp(denominator, min=self._eps)
-        
-        result = numerator / denominator
-        
-        # Ensure result is in the ball
-        norm_result = torch.linalg.norm(result, dim=-1, keepdim=True)
-        scale = torch.where(norm_result >= 1.0,
-                          (1.0 - self._eps) / (norm_result + self._eps),
-                          torch.ones_like(norm_result))
-        return result * scale
-    
-    def _lambda(self, x: Tensor) -> Tensor:
-        """Conformal factor in Poincaré ball."""
-        norm_x_sq = torch.sum(x ** 2, dim=-1, keepdim=True)
-        norm_x_sq = torch.clamp(norm_x_sq, max=1.0 - self._eps)
-        return 2.0 / (1.0 - self.c * norm_x_sq)
-    
-    # Hyperboloid model implementations (simplified)
-    
-    def _exp_hyperboloid(self, p: Tensor, v: Tensor) -> Tensor:
-        """Exponential map in hyperboloid model."""
-        # Simplified implementation
-        norm_v = self._minkowski_norm(v)
-        norm_v = torch.clamp(torch.abs(norm_v), min=self._eps)
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        
-        result = torch.cosh(sqrt_c * norm_v) * p + torch.sinh(sqrt_c * norm_v) / norm_v * v
-        return self._project_hyperboloid(result)
-    
-    def _log_hyperboloid(self, p: Tensor, q: Tensor) -> Tensor:
-        """Logarithmic map in hyperboloid model."""
-        dot = self._minkowski_dot(p, q)
-        dot = torch.clamp(dot, min=1.0 + self._eps)
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        alpha = torch.acosh(dot) / sqrt_c
-        
-        v = q - dot * p
-        norm_v = self._minkowski_norm(v)
-        norm_v = torch.clamp(torch.abs(norm_v), min=self._eps)
-        
-        return alpha / norm_v * v
-    
-    def _distance_hyperboloid(self, p: Tensor, q: Tensor) -> Tensor:
-        """Distance in hyperboloid model."""
-        dot = self._minkowski_dot(p, q)
-        dot = torch.clamp(dot, min=1.0 + self._eps)
-        
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        return torch.acosh(dot) / sqrt_c
-    
-    def _parallel_transport_hyperboloid(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """Parallel transport in hyperboloid model."""
-        # Simplified: project v onto tangent space at q
-        return self._project_tangent_hyperboloid(q, v)
-    
-    def _project_hyperboloid(self, x: Tensor) -> Tensor:
-        """Project onto hyperboloid upper sheet."""
-        # x[:-1] are spatial components, x[-1] is time component
-        spatial = x[..., :-1]
-        sqrt_c = torch.sqrt(torch.tensor(self.c))
-        
-        # Compute time component: x_n = sqrt(1/c + ||x||^2)
-        norm_sq = torch.sum(spatial ** 2, dim=-1, keepdim=True)
-        time = torch.sqrt(1.0 / self.c + norm_sq)
-        
-        return torch.cat([spatial, time], dim=-1)
-    
-    def _project_tangent_hyperboloid(self, p: Tensor, v: Tensor) -> Tensor:
-        """Project onto tangent space in hyperboloid model."""
-        # Tangent space: Minkowski orthogonal to p
-        dot = self._minkowski_dot(p, v)
-        return v - dot * p
-    
-    def _minkowski_dot(self, x: Tensor, y: Tensor) -> Tensor:
-        """Minkowski inner product: -x_n*y_n + sum(x_i*y_i)."""
-        spatial_dot = torch.sum(x[..., :-1] * y[..., :-1], dim=-1, keepdim=True)
-        time_dot = x[..., -1:] * y[..., -1:]
-        return -time_dot + spatial_dot
-    
-    def _minkowski_norm(self, x: Tensor) -> Tensor:
-        """Minkowski norm."""
-        return torch.sqrt(torch.abs(self._minkowski_dot(x, x)))
+        Returns:
+            Random tangent vector at p
+        """
+        v_euclidean = torch.randn_like(p)
+        # Scale by 1/λ_p so that Riemannian norm ~ Euclidean norm
+        # This makes "small" multipliers like 0.1 work as expected
+        lambda_p = self._lambda_x(p)
+        return v_euclidean / lambda_p

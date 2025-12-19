@@ -6,52 +6,64 @@ from ..manifold import Manifold
 
 
 class Euclidean(Manifold):
-    """Euclidean space ℝⁿ.
+    """
+    Euclidean space R^n with flat metric.
     
-    This is a flat manifold where all geometric operations reduce to
-    standard linear operations. It's included for compatibility with
-    PyTorch's standard optimization.
+    This is the trivial manifold where:
+    - exp_p(v) = p + v
+    - log_p(q) = q - p
+    - distance(p, q) = ||q - p||
+    
+    Useful for PyTorch compatibility and as a baseline.
     
     Args:
-        n: Dimension of the Euclidean space
+        n: Dimension of the space
     """
     
     def __init__(self, n: int):
-        self._dim = n
+        self.n = n
     
     @property
     def dim(self) -> int:
-        """Intrinsic dimension (same as ambient dimension for Euclidean space)."""
-        return self._dim
+        """Intrinsic dimension of the manifold."""
+        return self.n
     
     def exp(self, p: Tensor, v: Tensor) -> Tensor:
-        """Exponential map in Euclidean space is just addition.
+        """
+        Exponential map: move from p along geodesic with velocity v.
+        
+        For Euclidean space, this is simply addition: exp_p(v) = p + v
         
         Args:
-            p: Point in ℝⁿ
-            v: Tangent vector (any vector in ℝⁿ)
+            p: Point on manifold, shape (..., n)
+            v: Tangent vector at p, shape (..., n)
         
         Returns:
-            p + v
+            Point on manifold after geodesic flow
         """
         return p + v
     
     def log(self, p: Tensor, q: Tensor) -> Tensor:
-        """Logarithmic map in Euclidean space is just subtraction.
+        """
+        Logarithmic map: tangent vector at p pointing toward q.
+        
+        For Euclidean space, this is simply subtraction: log_p(q) = q - p
         
         Args:
-            p: Base point in ℝⁿ
-            q: Target point in ℝⁿ
+            p: Base point on manifold
+            q: Target point on manifold
         
         Returns:
-            q - p
+            Tangent vector v such that exp(p, v) = q
         """
         return q - p
     
     def parallel_transport(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """Parallel transport in Euclidean space is identity.
+        """
+        Parallel transport tangent vector v from T_pM to T_qM.
         
-        In flat space, parallel transport doesn't change the vector.
+        In Euclidean space, tangent spaces are all identified, so parallel
+        transport is the identity: PT(v) = v
         
         Args:
             v: Tangent vector at p
@@ -59,55 +71,82 @@ class Euclidean(Manifold):
             q: Destination point
         
         Returns:
-            v (unchanged)
+            Tangent vector at q with same geometric properties as v
         """
         return v
     
     def distance(self, p: Tensor, q: Tensor) -> Tensor:
-        """Euclidean distance between points.
+        """
+        Geodesic distance between points.
+        
+        For Euclidean space, this is the standard Euclidean norm: ||q - p||
         
         Args:
-            p: First point
-            q: Second point
+            p: First point, shape (..., n)
+            q: Second point, shape (..., n)
         
         Returns:
-            ||p - q||
+            Distance, shape (...)
         """
-        return torch.linalg.norm(p - q, dim=-1)
+        return torch.linalg.norm(q - p, dim=-1)
     
     def project(self, x: Tensor) -> Tensor:
-        """Projection onto Euclidean space is identity.
+        """
+        Project ambient space point onto manifold.
+        
+        For Euclidean space, every point is already on the manifold.
         
         Args:
-            x: Point in ambient space (already in ℝⁿ)
+            x: Point in ambient space
         
         Returns:
-            x (unchanged)
+            Closest point on manifold (identity)
         """
         return x
     
     def project_tangent(self, p: Tensor, v: Tensor) -> Tensor:
-        """Tangent space projection in Euclidean space is identity.
+        """
+        Project ambient vector onto tangent space at p.
+        
+        For Euclidean space, tangent space is the entire space.
         
         Args:
             p: Point on manifold
             v: Vector in ambient space
         
         Returns:
-            v (unchanged)
+            Component of v in T_pM (identity)
         """
         return v
     
     def random_point(self, *shape, device=None, dtype=None) -> Tensor:
-        """Generate random point(s) from standard normal distribution.
+        """
+        Generate random point(s) on manifold.
+        
+        Samples from standard normal distribution.
         
         Args:
-            *shape: Shape of the output (batch dimensions)
-            device: PyTorch device
-            dtype: PyTorch dtype
+            *shape: Shape of points to generate (excluding final dimension n)
+            device: Device to create tensor on
+            dtype: Data type of tensor
         
         Returns:
-            Random point(s) in ℝⁿ
+            Random point(s) on manifold
         """
-        full_shape = shape + (self._dim,)
-        return torch.randn(full_shape, device=device, dtype=dtype)
+        if not shape:
+            shape = ()
+        return torch.randn(*shape, self.n, device=device, dtype=dtype)
+    
+    def random_tangent(self, p: Tensor) -> Tensor:
+        """
+        Generate random tangent vector at p.
+        
+        For Euclidean space, samples from standard normal distribution.
+        
+        Args:
+            p: Point on manifold
+        
+        Returns:
+            Random tangent vector at p
+        """
+        return torch.randn_like(p)

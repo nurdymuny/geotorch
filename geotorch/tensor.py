@@ -1,4 +1,4 @@
-"""Manifold-aware tensor classes."""
+"""Tensor wrappers for manifold-valued data."""
 
 import torch
 from torch import Tensor
@@ -7,177 +7,258 @@ from .manifold import Manifold
 
 
 class ManifoldTensor(torch.Tensor):
-    """Tensor that lives on a manifold.
+    """
+    Tensor that lives on a manifold.
     
-    This class wraps a PyTorch tensor and associates it with a manifold,
-    enabling geometric operations like exponential map, logarithmic map,
-    and geodesic distance.
+    Wraps a torch.Tensor with an associated manifold, enabling
+    geometric operations like exp, log, and geodesic distance.
     
-    Attributes:
-        manifold: The manifold on which this tensor lives
+    Example:
+        >>> S = Sphere(64)
+        >>> p = ManifoldTensor(S.random_point(), manifold=S)
+        >>> v = S.random_tangent(p)
+        >>> q = p.exp(v)  # Move along geodesic
+        >>> print(p.distance(q))  # Geodesic distance
     """
     
     @staticmethod
-    def __new__(cls, data: Tensor, manifold: Manifold):
-        """Create a new ManifoldTensor.
+    def __new__(cls, data, manifold: Manifold, **kwargs):
+        """
+        Create a new ManifoldTensor.
         
         Args:
-            data: Tensor data
-            manifold: Associated manifold
-        
-        Returns:
-            ManifoldTensor instance
+            data: Tensor data (must be on the manifold)
+            manifold: Associated Riemannian manifold
+            **kwargs: Additional arguments for torch.Tensor
         """
-        # Create tensor subclass
-        instance = torch.Tensor._make_subclass(cls, data)
-        instance.manifold = manifold
-        return instance
+        # Create tensor as subclass of torch.Tensor
+        if isinstance(data, torch.Tensor):
+            tensor = torch.Tensor._make_subclass(cls, data)
+        else:
+            tensor = torch.Tensor._make_subclass(cls, torch.as_tensor(data, **kwargs))
+        
+        # Store manifold as an attribute
+        tensor.manifold = manifold
+        return tensor
+    
+    def __repr__(self):
+        return f"ManifoldTensor({super().__repr__()}, manifold={self.manifold.__class__.__name__})"
+    
+    def __add__(self, other):
+        """Addition with TangentTensor or other tensors."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            # Return underlying tensor addition (loses manifold structure)
+            return torch.Tensor.__add__(self, other)
+        return torch.Tensor.__add__(self, other)
+    
+    def __radd__(self, other):
+        return self.__add__(other)
+    
+    def __mul__(self, other):
+        """Scalar multiplication."""
+        result = torch.Tensor.__mul__(self, other)
+        # For scalar multiplication, try to preserve manifold structure
+        if isinstance(other, (int, float)):
+            return result  # But this may not be on manifold anymore
+        return result
+    
+    def __rmul__(self, other):
+        return self.__mul__(other)
+    
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        """
+        Handle torch function calls to preserve ManifoldTensor type.
+        """
+        if kwargs is None:
+            kwargs = {}
+        
+        # For most operations, fall back to standard Tensor behavior
+        # This loses the manifold structure, which is intentional for operations
+        # that don't preserve the manifold (like addition, multiplication, etc.)
+        ret = super().__torch_function__(func, types, args, kwargs)
+        return ret
     
     def project_(self) -> 'ManifoldTensor':
-        """Project onto manifold in-place.
+        """
+        Project onto manifold in-place.
         
         Returns:
-            Self (for chaining)
+            Self after projection
         """
         projected = self.manifold.project(self)
         self.data.copy_(projected)
         return self
     
     def exp(self, v: Tensor) -> 'ManifoldTensor':
-        """Move along geodesic with velocity v.
+        """
+        Move along geodesic with velocity v.
         
         Args:
             v: Tangent vector at this point
         
         Returns:
-            New point on manifold
+            New point on manifold after exponential map
         """
-        result = self.manifold.exp(self, v)
-        return ManifoldTensor(result, self.manifold)
+        # Convert to plain torch.Tensor to avoid type issues in manifold methods
+        p_data = torch.Tensor(self)
+        v_data = torch.Tensor(v) if isinstance(v, torch.Tensor) else v
+        result = self.manifold.exp(p_data, v_data)
+        return ManifoldTensor(result, manifold=self.manifold)
     
-    def log(self, q: 'ManifoldTensor') -> 'TangentTensor':
-        """Tangent vector pointing toward q.
+    def log(self, q: 'ManifoldTensor') -> Tensor:
+        """
+        Tangent vector pointing toward q.
         
         Args:
             q: Target point on manifold
         
         Returns:
-            Tangent vector at self pointing toward q
+            Tangent vector v such that self.exp(v) = q
         """
         if not isinstance(q, ManifoldTensor):
-            raise TypeError("q must be a ManifoldTensor")
+            raise TypeError("Argument must be a ManifoldTensor")
         if q.manifold != self.manifold:
-            raise ValueError("q must be on the same manifold")
+            raise ValueError("Points must be on the same manifold")
         
-        v = self.manifold.log(self, q)
-        return TangentTensor(v, self.manifold, self)
+        # Convert to plain torch.Tensor
+        p_data = torch.Tensor(self)
+        q_data = torch.Tensor(q)
+        return self.manifold.log(p_data, q_data)
     
     def distance(self, q: 'ManifoldTensor') -> Tensor:
-        """Geodesic distance to q.
+        """
+        Geodesic distance to q.
         
         Args:
             q: Target point on manifold
         
         Returns:
-            Geodesic distance
+            Geodesic distance as a scalar tensor
         """
         if not isinstance(q, ManifoldTensor):
-            raise TypeError("q must be a ManifoldTensor")
+            raise TypeError("Argument must be a ManifoldTensor")
         if q.manifold != self.manifold:
-            raise ValueError("q must be on the same manifold")
+            raise ValueError("Points must be on the same manifold")
         
-        return self.manifold.distance(self, q)
+        # Convert to plain torch.Tensor
+        p_data = torch.Tensor(self)
+        q_data = torch.Tensor(q)
+        return self.manifold.distance(p_data, q_data)
     
     def geodesic_to(self, q: 'ManifoldTensor', t: float) -> 'ManifoldTensor':
-        """Interpolate toward q along geodesic.
+        """
+        Interpolate toward q along geodesic.
         
         Args:
-            q: Target point
-            t: Parameter in [0, 1] (0 = self, 1 = q)
+            q: Target point on manifold
+            t: Parameter in [0, 1], where 0 returns self and 1 returns q
         
         Returns:
-            Point along geodesic
+            Point along geodesic at parameter t
         """
         if not isinstance(q, ManifoldTensor):
-            raise TypeError("q must be a ManifoldTensor")
+            raise TypeError("Argument must be a ManifoldTensor")
         if q.manifold != self.manifold:
-            raise ValueError("q must be on the same manifold")
+            raise ValueError("Points must be on the same manifold")
         
         result = self.manifold.geodesic(self, q, t)
-        return ManifoldTensor(result, self.manifold)
-    
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"ManifoldTensor({super().__repr__()}, manifold={self.manifold.__class__.__name__})"
+        return ManifoldTensor(result, manifold=self.manifold)
 
 
 class TangentTensor(torch.Tensor):
-    """Tangent vector with base point reference.
+    """
+    Tangent vector with base point reference.
     
-    This class represents a vector in the tangent space T_pM at a base point p.
-    It stores both the vector and its base point for geometric operations.
-    
-    Attributes:
-        manifold: The manifold
-        base_point: The point at which this is a tangent vector
+    A tangent vector v ∈ T_pM needs to know its base point p
+    for operations like parallel transport.
     """
     
     @staticmethod
-    def __new__(cls, data: Tensor, manifold: Manifold, base_point: Tensor):
-        """Create a new TangentTensor.
+    def __new__(cls, data, base_point: Tensor, manifold: Manifold, **kwargs):
+        """
+        Create a new TangentTensor.
         
         Args:
-            data: Tangent vector data
-            manifold: Associated manifold
-            base_point: Base point on manifold
-        
-        Returns:
-            TangentTensor instance
+            data: Tensor data (must be in tangent space at base_point)
+            base_point: Base point on manifold where this tangent vector lives
+            manifold: Associated Riemannian manifold
+            **kwargs: Additional arguments for torch.Tensor
         """
-        instance = torch.Tensor._make_subclass(cls, data)
-        instance.manifold = manifold
-        instance.base_point = base_point
-        return instance
-    
-    def exp(self) -> ManifoldTensor:
-        """Apply exponential map to get point on manifold.
+        # Create tensor as subclass of torch.Tensor
+        if isinstance(data, torch.Tensor):
+            tensor = torch.Tensor._make_subclass(cls, data)
+        else:
+            tensor = torch.Tensor._make_subclass(cls, torch.as_tensor(data, **kwargs))
         
-        Returns:
-            Point on manifold reached by following geodesic
-        """
-        result = self.manifold.exp(self.base_point, self)
-        return ManifoldTensor(result, self.manifold)
+        # Store base point and manifold as attributes
+        tensor.base_point = base_point
+        tensor.manifold = manifold
+        return tensor
     
-    def norm(self) -> Tensor:
-        """Riemannian norm at base point.
+    def __repr__(self):
+        return (f"TangentTensor({super().__repr__()}, "
+                f"manifold={self.manifold.__class__.__name__})")
+    
+    def __add__(self, other):
+        """Addition with ManifoldTensor or other TangentTensor."""
+        if isinstance(other, ManifoldTensor):
+            # Return underlying tensor addition (loses tangent structure)
+            return torch.Tensor.__add__(self, other)
+        elif isinstance(other, TangentTensor):
+            result = torch.Tensor.__add__(self, other)
+            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
+        return torch.Tensor.__add__(self, other)
+    
+    def __radd__(self, other):
+        return self.__add__(other)
+    
+    def __mul__(self, other):
+        """Scalar multiplication or interaction with ManifoldTensor."""
+        if isinstance(other, (int, float)):
+            result = torch.Tensor.__mul__(self, other)
+            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
+        elif isinstance(other, ManifoldTensor):
+            # Return underlying tensor multiplication
+            return torch.Tensor.__mul__(self, other)
+        elif isinstance(other, torch.Tensor) and not isinstance(other, (ManifoldTensor, TangentTensor)):
+            result = torch.Tensor.__mul__(self, other)
+            return result
+        return torch.Tensor.__mul__(self, other)
+    
+    def __rmul__(self, other):
+        return self.__mul__(other)
+    
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        """
+        Handle torch function calls to preserve TangentTensor type.
+        """
+        if kwargs is None:
+            kwargs = {}
         
-        Returns:
-            Norm of this tangent vector
-        """
-        return self.manifold.norm(self.base_point, self)
+        # For most operations, fall back to standard Tensor behavior
+        ret = super().__torch_function__(func, types, args, kwargs)
+        return ret
     
-    def project_(self) -> 'TangentTensor':
-        """Project onto tangent space in-place.
-        
-        Returns:
-            Self (for chaining)
+    def parallel_transport(self, q: Tensor) -> 'TangentTensor':
         """
-        projected = self.manifold.project_tangent(self.base_point, self)
-        self.data.copy_(projected)
-        return self
-    
-    def parallel_transport_to(self, q: Tensor) -> 'TangentTensor':
-        """Parallel transport to another point.
+        Parallel transport to tangent space at q.
         
         Args:
             q: Destination point on manifold
         
         Returns:
-            Tangent vector at q
+            Transported tangent vector at q
         """
-        result = self.manifold.parallel_transport(self, self.base_point, q)
-        return TangentTensor(result, self.manifold, q)
+        transported = self.manifold.parallel_transport(self, self.base_point, q)
+        return TangentTensor(transported, base_point=q, manifold=self.manifold)
     
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"TangentTensor({super().__repr__()}, at={self.base_point})"
+    def norm(self) -> Tensor:
+        """
+        Riemannian norm of this tangent vector.
+        
+        Returns:
+            ||self||_p where p is the base point
+        """
+        return self.manifold.norm(self.base_point, self)

@@ -1,4 +1,4 @@
-"""Base manifold class for GeoTorch."""
+"""Base abstract class for Riemannian manifolds."""
 
 from abc import ABC, abstractmethod
 import torch
@@ -6,28 +6,23 @@ from torch import Tensor
 
 
 class Manifold(ABC):
-    """Abstract base class for Riemannian manifolds.
+    """
+    Abstract base class for Riemannian manifolds.
     
-    This class defines the interface that all manifold implementations must follow.
-    It provides the core geometric operations needed for Riemannian optimization.
+    A Riemannian manifold (M, g) is a smooth space equipped with a metric tensor g
+    that defines distances, angles, and geodesics (shortest paths).
     """
     
     @property
     @abstractmethod
     def dim(self) -> int:
-        """Intrinsic dimension of the manifold.
-        
-        Returns:
-            The intrinsic dimension (number of degrees of freedom).
-        """
-        pass
+        """Intrinsic dimension of the manifold."""
+        ...
     
     @abstractmethod
     def exp(self, p: Tensor, v: Tensor) -> Tensor:
-        """Exponential map: move from p along geodesic with velocity v.
-        
-        The exponential map exp_p(v) gives the point on the manifold reached by
-        following the geodesic starting at p with initial velocity v for unit time.
+        """
+        Exponential map: move from p along geodesic with velocity v.
         
         Args:
             p: Point on manifold, shape (..., ambient_dim)
@@ -36,14 +31,12 @@ class Manifold(ABC):
         Returns:
             Point on manifold after geodesic flow
         """
-        pass
+        ...
     
     @abstractmethod
     def log(self, p: Tensor, q: Tensor) -> Tensor:
-        """Logarithmic map: tangent vector at p pointing toward q.
-        
-        The logarithmic map log_p(q) gives the tangent vector v at p such that
-        exp_p(v) = q. This is the inverse of the exponential map.
+        """
+        Logarithmic map: tangent vector at p pointing toward q.
         
         Args:
             p: Base point on manifold
@@ -51,15 +44,16 @@ class Manifold(ABC):
         
         Returns:
             Tangent vector v such that exp(p, v) = q
+            
+        Raises:
+            ValueError: If q is at or beyond the cut locus of p
         """
-        pass
+        ...
     
     @abstractmethod
     def parallel_transport(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """Parallel transport tangent vector v from T_pM to T_qM.
-        
-        Parallel transport moves a tangent vector along a geodesic while
-        preserving its geometric properties (direction and norm).
+        """
+        Parallel transport tangent vector v from T_pM to T_qM.
         
         Args:
             v: Tangent vector at p
@@ -69,13 +63,12 @@ class Manifold(ABC):
         Returns:
             Tangent vector at q with same geometric properties as v
         """
-        pass
+        ...
     
     @abstractmethod
     def distance(self, p: Tensor, q: Tensor) -> Tensor:
-        """Geodesic distance between points.
-        
-        Computes the length of the shortest geodesic connecting p and q.
+        """
+        Geodesic distance between points.
         
         Args:
             p: First point, shape (..., ambient_dim)
@@ -84,13 +77,12 @@ class Manifold(ABC):
         Returns:
             Distance, shape (...)
         """
-        pass
+        ...
     
     @abstractmethod
     def project(self, x: Tensor) -> Tensor:
-        """Project ambient space point onto manifold.
-        
-        Finds the closest point on the manifold to x (in ambient space).
+        """
+        Project ambient space point onto manifold.
         
         Args:
             x: Point in ambient space
@@ -98,13 +90,12 @@ class Manifold(ABC):
         Returns:
             Closest point on manifold
         """
-        pass
+        ...
     
     @abstractmethod
     def project_tangent(self, p: Tensor, v: Tensor) -> Tensor:
-        """Project ambient vector onto tangent space at p.
-        
-        Projects an ambient space vector onto the tangent space T_pM.
+        """
+        Project ambient vector onto tangent space at p.
         
         Args:
             p: Point on manifold
@@ -113,43 +104,39 @@ class Manifold(ABC):
         Returns:
             Component of v in T_pM
         """
-        pass
+        ...
     
     def norm(self, p: Tensor, v: Tensor) -> Tensor:
-        """Riemannian norm of tangent vector v at point p.
-        
-        Computes ||v||_p = sqrt(g_p(v, v)) where g_p is the metric tensor.
-        For manifolds embedded in Euclidean space, this defaults to the
-        Euclidean norm.
+        """
+        Riemannian norm of tangent vector v at point p.
         
         Args:
             p: Point on manifold
             v: Tangent vector at p
         
         Returns:
-            Norm of v at p
+            ||v||_p = sqrt(g_p(v, v)) where g is the Riemannian metric
         """
+        # Default for embedded submanifolds with induced metric
         return torch.linalg.norm(v, dim=-1)
     
-    def in_domain(self, p: Tensor, q: Tensor) -> bool:
-        """Check if log_p(q) is well-defined (q not at cut locus).
-        
-        The logarithmic map may not be well-defined everywhere. For example,
-        on the sphere, the cut locus of p is the antipodal point -p.
+    def in_domain(self, p: Tensor, q: Tensor) -> Tensor:
+        """
+        Check if log_p(q) is well-defined (q not at cut locus of p).
         
         Args:
             p: Base point
             q: Target point
-        
+            
         Returns:
-            True if log_p(q) is well-defined, False otherwise
+            Boolean tensor, True if log_p(q) is defined
         """
-        return True  # Default: log is well-defined everywhere
+        # Default: always in domain (override for compact manifolds)
+        return torch.ones(p.shape[:-1], dtype=torch.bool, device=p.device)
     
     def geodesic(self, p: Tensor, q: Tensor, t: float) -> Tensor:
-        """Point along geodesic from p to q at parameter t.
-        
-        Computes the point γ(t) on the geodesic where γ(0) = p and γ(1) = q.
+        """
+        Point along geodesic from p to q at parameter t.
         
         Args:
             p: Start point
@@ -157,32 +144,17 @@ class Manifold(ABC):
             t: Parameter in [0, 1]
         
         Returns:
-            Point γ(t) along the geodesic
+            Point γ(t) where γ(0)=p, γ(1)=q
         """
         v = self.log(p, q)
         return self.exp(p, t * v)
     
+    @abstractmethod
     def random_point(self, *shape, device=None, dtype=None) -> Tensor:
-        """Generate random point(s) on manifold.
-        
-        Args:
-            *shape: Shape of the output (batch dimensions)
-            device: PyTorch device
-            dtype: PyTorch dtype
-        
-        Returns:
-            Random point(s) on the manifold
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} does not implement random_point")
+        """Generate random point(s) on manifold."""
+        ...
     
+    @abstractmethod
     def random_tangent(self, p: Tensor) -> Tensor:
-        """Generate random tangent vector at p.
-        
-        Args:
-            p: Base point on manifold
-        
-        Returns:
-            Random tangent vector at p
-        """
-        v = torch.randn_like(p)
-        return self.project_tangent(p, v)
+        """Generate random tangent vector at p."""
+        ...
