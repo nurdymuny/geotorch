@@ -55,15 +55,17 @@ class Sphere(Manifold):
         v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
         
         # Compute exp using stable formula
-        # For small ||v||, use Taylor expansion: sin(x)/x ≈ 1 - x²/6
-        # For larger ||v||, use full formula
         cos_norm = torch.cos(v_norm)
         
-        # Use sinc function: sinc(x) = sin(x)/x, with limit 1 as x→0
-        # For numerical stability, use where to handle small values
-        small_norm = v_norm < self.eps
-        sinc = torch.ones_like(v_norm)
-        sinc = torch.where(small_norm, sinc, torch.sin(v_norm) / v_norm)
+        # For sinc(x) = sin(x)/x, use Taylor approximation for small x
+        # sinc(x) ≈ 1 - x²/6 for |x| < eps
+        # Otherwise use sin(x)/x
+        v_norm_sq = v_norm * v_norm
+        sinc = torch.where(
+            v_norm < self.eps,
+            1.0 - v_norm_sq / 6.0,  # Taylor approximation
+            torch.sin(v_norm) / v_norm
+        )
         
         result = cos_norm * p + sinc * v
         
@@ -97,11 +99,15 @@ class Sphere(Manifold):
         if torch.any(~in_domain):
             raise ValueError("Target point is at or beyond the cut locus (antipodal point)")
         
-        # Use theta/sin(theta) with proper limit handling
-        # As theta → 0, theta/sin(theta) → 1
-        small_theta = theta.abs() < self.eps
-        theta_over_sin = torch.ones_like(theta)
-        theta_over_sin = torch.where(small_theta, theta_over_sin, theta / sin_theta)
+        # For theta/sin(theta), use Taylor approximation for small theta
+        # theta/sin(theta) ≈ 1 + theta²/6 for |theta| < eps
+        # Otherwise use theta/sin(theta)
+        theta_sq = theta * theta
+        theta_over_sin = torch.where(
+            theta.abs() < self.eps,
+            1.0 + theta_sq / 6.0,  # Taylor approximation
+            theta / sin_theta
+        )
         
         result = theta_over_sin * (q - dot * p)
         
@@ -125,15 +131,10 @@ class Sphere(Manifold):
         w = self.log(p, q)
         w_norm = torch.linalg.norm(w, dim=-1, keepdim=True)
         
-        # For very small norms (p ≈ q), parallel transport is identity
-        small_norm = w_norm < self.eps
-        
-        # Compute unit vector safely
-        w_unit = torch.where(
-            small_norm.expand_as(w),
-            torch.zeros_like(w),  # Doesn't matter when small_norm is True
-            w / w_norm
-        )
+        # Compute unit vector, handling small norms
+        # When w_norm is small, w_unit doesn't matter because cos(w_norm) ≈ 1
+        # and sin(w_norm) ≈ 0, so the formula reduces to v
+        w_unit = w / w_norm.clamp(min=self.eps)
         
         # Parallel transport formula for sphere
         cos_norm = torch.cos(w_norm)
@@ -147,9 +148,6 @@ class Sphere(Manifold):
             + cos_norm * v_perp
             + torch.sum(v * w_unit, dim=-1, keepdim=True) * q
         )
-        
-        # When p ≈ q, return v unchanged
-        result = torch.where(small_norm.expand_as(result), v, result)
         
         return result
     
