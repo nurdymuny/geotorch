@@ -52,6 +52,10 @@ class Sphere(Manifold):
         Returns:
             Point on manifold after geodesic flow
         """
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        v = torch.as_tensor(v)
+        
         v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
         
         # Compute exp using stable formula
@@ -87,6 +91,10 @@ class Sphere(Manifold):
         Raises:
             ValueError: If q is at or beyond the cut locus of p
         """
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
+        
         # Compute dot product, clamped to [-1, 1] for numerical stability
         dot = torch.sum(p * q, dim=-1, keepdim=True)
         # Only clamp lower bound strictly to avoid antipodal issues
@@ -129,6 +137,11 @@ class Sphere(Manifold):
         Returns:
             Tangent vector at q with same geometric properties as v
         """
+        # Ensure inputs are plain tensors (not subclasses)
+        v = torch.as_tensor(v)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
+        
         # Compute log_p(q)
         w = self.log(p, q)
         w_norm = torch.linalg.norm(w, dim=-1, keepdim=True)

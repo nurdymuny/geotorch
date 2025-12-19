@@ -2,7 +2,6 @@
 
 import torch
 from torch import Tensor
-from typing import Optional
 from .manifold import Manifold
 
 
@@ -42,7 +41,7 @@ class ManifoldTensor(torch.Tensor):
         return tensor
     
     def __repr__(self):
-        return f"ManifoldTensor({super().__repr__()}, manifold={self.manifold.__class__.__name__})"
+        return f"ManifoldTensor({torch.Tensor.__repr__(self)}, manifold={self.manifold.__class__.__name__})"
     
     def __add__(self, other):
         """Addition with TangentTensor or other tensors."""
@@ -197,7 +196,7 @@ class TangentTensor(torch.Tensor):
         return tensor
     
     def __repr__(self):
-        return (f"TangentTensor({super().__repr__()}, "
+        return (f"TangentTensor({torch.Tensor.__repr__(self)}, "
                 f"manifold={self.manifold.__class__.__name__})")
     
     def __add__(self, other):
