@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "davistensor"
+version = "0.1.0"
+description = "A geometry-native tensor library where tensors know their own geometry"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Davis-Wilson Research", email = "research@example.com"}
+]
+keywords = [
+    "tensor",
+    "riemannian",
+    "geometry",
+    "manifold",
+    "hyperbolic",
+    "deep-learning",
+    "machine-learning"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+cuda11 = [
+    "cupy-cuda11x>=12.0.0",
+]
+cuda12 = [
+    "cupy-cuda12x>=12.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nurdymuny/davistensor"
+Documentation = "https://github.com/nurdymuny/davistensor#readme"
+Repository = "https://github.com/nurdymuny/davistensor"
+Issues = "https://github.com/nurdymuny/davistensor/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["davistensor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
