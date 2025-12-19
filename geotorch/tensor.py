@@ -33,9 +33,9 @@ class ManifoldTensor(torch.Tensor):
         """
         # Create tensor as subclass of torch.Tensor
         if isinstance(data, torch.Tensor):
-            tensor = data.as_subclass(cls)
+            tensor = torch.Tensor._make_subclass(cls, data)
         else:
-            tensor = torch.as_tensor(data, **kwargs).as_subclass(cls)
+            tensor = torch.Tensor._make_subclass(cls, torch.as_tensor(data, **kwargs))
         
         # Store manifold as an attribute
         tensor.manifold = manifold
@@ -43,6 +43,27 @@ class ManifoldTensor(torch.Tensor):
     
     def __repr__(self):
         return f"ManifoldTensor({super().__repr__()}, manifold={self.manifold.__class__.__name__})"
+    
+    def __add__(self, other):
+        """Addition with TangentTensor or other tensors."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            # Return underlying tensor addition (loses manifold structure)
+            return torch.Tensor.__add__(self, other)
+        return torch.Tensor.__add__(self, other)
+    
+    def __radd__(self, other):
+        return self.__add__(other)
+    
+    def __mul__(self, other):
+        """Scalar multiplication."""
+        result = torch.Tensor.__mul__(self, other)
+        # For scalar multiplication, try to preserve manifold structure
+        if isinstance(other, (int, float)):
+            return result  # But this may not be on manifold anymore
+        return result
+    
+    def __rmul__(self, other):
+        return self.__mul__(other)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -79,7 +100,10 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             New point on manifold after exponential map
         """
-        result = self.manifold.exp(self, v)
+        # Extract underlying tensor data to avoid type issues
+        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
+        v_data = v.data if hasattr(v, 'data') else torch.Tensor(v) if isinstance(v, torch.Tensor) else v
+        result = self.manifold.exp(p_data, v_data)
         return ManifoldTensor(result, manifold=self.manifold)
     
     def log(self, q: 'ManifoldTensor') -> Tensor:
@@ -97,7 +121,10 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        return self.manifold.log(self, q)
+        # Extract underlying tensor data
+        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
+        q_data = q.data if hasattr(q, 'data') else torch.Tensor(q)
+        return self.manifold.log(p_data, q_data)
     
     def distance(self, q: 'ManifoldTensor') -> Tensor:
         """
@@ -114,7 +141,10 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        return self.manifold.distance(self, q)
+        # Extract underlying tensor data
+        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
+        q_data = q.data if hasattr(q, 'data') else torch.Tensor(q)
+        return self.manifold.distance(p_data, q_data)
     
     def geodesic_to(self, q: 'ManifoldTensor', t: float) -> 'ManifoldTensor':
         """
@@ -157,9 +187,9 @@ class TangentTensor(torch.Tensor):
         """
         # Create tensor as subclass of torch.Tensor
         if isinstance(data, torch.Tensor):
-            tensor = data.as_subclass(cls)
+            tensor = torch.Tensor._make_subclass(cls, data)
         else:
-            tensor = torch.as_tensor(data, **kwargs).as_subclass(cls)
+            tensor = torch.Tensor._make_subclass(cls, torch.as_tensor(data, **kwargs))
         
         # Store base point and manifold as attributes
         tensor.base_point = base_point
@@ -169,6 +199,35 @@ class TangentTensor(torch.Tensor):
     def __repr__(self):
         return (f"TangentTensor({super().__repr__()}, "
                 f"manifold={self.manifold.__class__.__name__})")
+    
+    def __add__(self, other):
+        """Addition with ManifoldTensor or other TangentTensor."""
+        if isinstance(other, ManifoldTensor):
+            # Return underlying tensor addition (loses tangent structure)
+            return torch.Tensor.__add__(self, other)
+        elif isinstance(other, TangentTensor):
+            result = torch.Tensor.__add__(self, other)
+            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
+        return torch.Tensor.__add__(self, other)
+    
+    def __radd__(self, other):
+        return self.__add__(other)
+    
+    def __mul__(self, other):
+        """Scalar multiplication or interaction with ManifoldTensor."""
+        if isinstance(other, (int, float)):
+            result = torch.Tensor.__mul__(self, other)
+            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
+        elif isinstance(other, ManifoldTensor):
+            # Return underlying tensor multiplication
+            return torch.Tensor.__mul__(self, other)
+        elif isinstance(other, torch.Tensor) and not isinstance(other, (ManifoldTensor, TangentTensor)):
+            result = torch.Tensor.__mul__(self, other)
+            return result
+        return torch.Tensor.__mul__(self, other)
+    
+    def __rmul__(self, other):
+        return self.__mul__(other)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):

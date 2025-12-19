@@ -103,7 +103,18 @@ class Hyperbolic(Manifold):
         
         # Exponential map: p ⊕ (scaled_norm * v_normalized)
         direction = scaled_norm * v_normalized
-        return self._mobius_add(p, direction)
+        result = self._mobius_add(p, direction)
+        
+        # Ensure result stays inside the ball with a small margin
+        result_norm = torch.linalg.norm(result, dim=-1, keepdim=True)
+        # Clip to stay safely inside ball (< 1.0)
+        result = torch.where(
+            result_norm >= 0.999,
+            result * 0.999 / result_norm,
+            result
+        )
+        
+        return result
     
     def log(self, p: Tensor, q: Tensor) -> Tensor:
         """
