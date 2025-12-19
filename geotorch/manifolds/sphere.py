@@ -89,7 +89,9 @@ class Sphere(Manifold):
         """
         # Compute dot product, clamped to [-1, 1] for numerical stability
         dot = torch.sum(p * q, dim=-1, keepdim=True)
-        dot = torch.clamp(dot, -1.0 + self.eps, 1.0 - self.eps)
+        # Only clamp lower bound strictly to avoid antipodal issues
+        # Upper bound can be exactly 1.0 (for same point case)
+        dot = torch.clamp(dot, min=-1.0 + self.eps, max=1.0)
         
         theta = torch.acos(dot)
         sin_theta = torch.sin(theta)
@@ -165,7 +167,8 @@ class Sphere(Manifold):
             Distance, shape (...)
         """
         dot = torch.sum(p * q, dim=-1)
-        dot = torch.clamp(dot, -1.0 + self.eps, 1.0 - self.eps)
+        # Only clamp lower bound strictly, upper can be exactly 1.0
+        dot = torch.clamp(dot, min=-1.0 + self.eps, max=1.0)
         return torch.acos(dot)
     
     def project(self, x: Tensor) -> Tensor:
