@@ -105,15 +105,8 @@ class Hyperbolic(Manifold):
         direction = scaled_norm * v_normalized
         result = self._mobius_add(p, direction)
         
-        # Ensure result stays inside the ball with a small margin
-        result_norm = torch.linalg.norm(result, dim=-1, keepdim=True)
-        # Clip to stay safely inside ball (< 1.0)
-        result = torch.where(
-            result_norm >= 0.999,
-            result * 0.999 / result_norm,
-            result
-        )
-        
+        # Möbius addition keeps points inside the unit ball automatically.
+        # No clipping needed - it would break the exp-log inverse property.
         return result
     
     def log(self, p: Tensor, q: Tensor) -> Tensor:
@@ -296,7 +289,9 @@ class Hyperbolic(Manifold):
         """
         Generate random tangent vector at p.
         
-        For Poincaré ball, samples from standard normal distribution.
+        For Poincaré ball, samples from standard normal distribution,
+        scaled by the inverse conformal factor to have unit Riemannian norm on average.
+        This ensures the tangent vector is reasonable in the Riemannian metric.
         
         Args:
             p: Point on manifold
@@ -304,4 +299,8 @@ class Hyperbolic(Manifold):
         Returns:
             Random tangent vector at p
         """
-        return torch.randn_like(p)
+        v_euclidean = torch.randn_like(p)
+        # Scale by 1/λ_p so that Riemannian norm ~ Euclidean norm
+        # This makes "small" multipliers like 0.1 work as expected
+        lambda_p = self._lambda_x(p)
+        return v_euclidean / lambda_p

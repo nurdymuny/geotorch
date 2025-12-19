@@ -100,9 +100,9 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             New point on manifold after exponential map
         """
-        # Extract underlying tensor data to avoid type issues
-        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
-        v_data = v.data if hasattr(v, 'data') else torch.Tensor(v) if isinstance(v, torch.Tensor) else v
+        # Convert to plain torch.Tensor to avoid type issues in manifold methods
+        p_data = torch.Tensor(self)
+        v_data = torch.Tensor(v) if isinstance(v, torch.Tensor) else v
         result = self.manifold.exp(p_data, v_data)
         return ManifoldTensor(result, manifold=self.manifold)
     
@@ -121,9 +121,9 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        # Extract underlying tensor data
-        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
-        q_data = q.data if hasattr(q, 'data') else torch.Tensor(q)
+        # Convert to plain torch.Tensor
+        p_data = torch.Tensor(self)
+        q_data = torch.Tensor(q)
         return self.manifold.log(p_data, q_data)
     
     def distance(self, q: 'ManifoldTensor') -> Tensor:
@@ -141,9 +141,9 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        # Extract underlying tensor data
-        p_data = self.data if hasattr(self, 'data') else torch.Tensor(self)
-        q_data = q.data if hasattr(q, 'data') else torch.Tensor(q)
+        # Convert to plain torch.Tensor
+        p_data = torch.Tensor(self)
+        q_data = torch.Tensor(q)
         return self.manifold.distance(p_data, q_data)
     
     def geodesic_to(self, q: 'ManifoldTensor', t: float) -> 'ManifoldTensor':
