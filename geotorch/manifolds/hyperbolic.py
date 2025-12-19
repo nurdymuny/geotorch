@@ -70,10 +70,6 @@ class Hyperbolic(Manifold):
         """Möbius scalar multiplication in Poincaré ball."""
         x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
         
-        # Handle zero vector
-        if (x_norm < self.eps).all():
-            return x
-        
         # r ⊗ x = tanh(r * arctanh(||x||)) * x / ||x||
         x_norm_clamped = torch.clamp(x_norm, max=1.0 - self.eps)
         arctanh_norm = torch.arctanh(x_norm_clamped)
@@ -99,11 +95,6 @@ class Hyperbolic(Manifold):
             raise NotImplementedError("Only Poincaré model is implemented")
         
         v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
-        
-        # Handle zero velocity
-        if (v_norm < self.eps).all():
-            return p
-        
         lambda_p = self._lambda_x(p)
         
         # Compute direction and scaled norm
@@ -135,10 +126,6 @@ class Hyperbolic(Manifold):
         diff = self._mobius_add(minus_p, q)
         diff_norm = torch.linalg.norm(diff, dim=-1, keepdim=True)
         
-        # Handle same point
-        if (diff_norm < self.eps).all():
-            return torch.zeros_like(p)
-        
         lambda_p = self._lambda_x(p)
         
         # log_p(q) = (2/λ_p) * arctanh(||diff||) * diff / ||diff||
@@ -163,14 +150,6 @@ class Hyperbolic(Manifold):
         """
         if self.model != 'poincare':
             raise NotImplementedError("Only Poincaré model is implemented")
-        
-        # Compute log_p(q) for the direction
-        direction = self.log(p, q)
-        direction_norm = torch.linalg.norm(direction, dim=-1, keepdim=True)
-        
-        # Handle p = q case
-        if (direction_norm < self.eps).all():
-            return v
         
         lambda_p = self._lambda_x(p)
         lambda_q = self._lambda_x(q)

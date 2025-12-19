@@ -54,21 +54,16 @@ class Sphere(Manifold):
         """
         v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
         
-        # Handle small velocities for numerical stability
-        mask = v_norm > self.eps
+        # Clamp v_norm to avoid division by zero
+        v_norm_safe = torch.clamp(v_norm, min=self.eps)
         
-        result = torch.zeros_like(p)
-        result[..., :] = p  # Default: exp_p(0) = p
+        # Compute exp using stable formula
+        cos_norm = torch.cos(v_norm)
+        sin_norm = torch.sin(v_norm)
         
-        if mask.any():
-            v_norm_safe = v_norm[mask]
-            p_masked = p[mask.squeeze(-1)]
-            v_masked = v[mask.squeeze(-1)]
-            
-            cos_norm = torch.cos(v_norm_safe)
-            sin_norm = torch.sin(v_norm_safe)
-            
-            result[mask.squeeze(-1)] = cos_norm * p_masked + sin_norm * v_masked / v_norm_safe
+        # For small norms, use first-order approximation: exp_p(v) ≈ p
+        # For larger norms, use full formula
+        result = cos_norm * p + (sin_norm / v_norm_safe) * v
         
         return result
     
@@ -99,19 +94,11 @@ class Sphere(Manifold):
         if not self.in_domain(p, q).all():
             raise ValueError("Target point is at or beyond the cut locus (antipodal point)")
         
-        # Handle small angles for numerical stability
-        mask = sin_theta.abs() > self.eps
+        # Clamp sin_theta to avoid division by zero
+        sin_theta_safe = torch.clamp(sin_theta.abs(), min=self.eps)
         
-        result = torch.zeros_like(p)
-        
-        if mask.any():
-            theta_safe = theta[mask]
-            sin_theta_safe = sin_theta[mask]
-            p_masked = p[mask.squeeze(-1)]
-            q_masked = q[mask.squeeze(-1)]
-            dot_masked = dot[mask]
-            
-            result[mask.squeeze(-1)] = theta_safe * (q_masked - dot_masked * p_masked) / sin_theta_safe
+        # Use the sign of sin_theta for the computation
+        result = (theta / sin_theta_safe) * (q - dot * p)
         
         return result
     
@@ -133,32 +120,22 @@ class Sphere(Manifold):
         w = self.log(p, q)
         w_norm = torch.linalg.norm(w, dim=-1, keepdim=True)
         
-        # Handle case where p = q
-        mask = w_norm > self.eps
+        # Clamp to avoid division by zero
+        w_norm_safe = torch.clamp(w_norm, min=self.eps)
         
-        result = torch.zeros_like(v)
-        result[..., :] = v  # Default: PT(v) = v when p = q
+        # Parallel transport formula for sphere
+        cos_norm = torch.cos(w_norm)
+        sin_norm = torch.sin(w_norm)
         
-        if mask.any():
-            w_norm_safe = w_norm[mask]
-            p_masked = p[mask.squeeze(-1)]
-            q_masked = q[mask.squeeze(-1)]
-            v_masked = v[mask.squeeze(-1)]
-            w_masked = w[mask.squeeze(-1)]
-            
-            # Parallel transport formula for sphere
-            cos_norm = torch.cos(w_norm_safe)
-            sin_norm = torch.sin(w_norm_safe)
-            
-            w_unit = w_masked / w_norm_safe
-            v_parallel = torch.sum(v_masked * w_unit, dim=-1, keepdim=True) * w_unit
-            v_perp = v_masked - v_parallel
-            
-            result[mask.squeeze(-1)] = (
-                -sin_norm * torch.sum(v_masked * w_unit, dim=-1, keepdim=True) * p_masked
-                + cos_norm * v_perp
-                + torch.sum(v_masked * w_unit, dim=-1, keepdim=True) * q_masked
-            )
+        w_unit = w / w_norm_safe
+        v_parallel = torch.sum(v * w_unit, dim=-1, keepdim=True) * w_unit
+        v_perp = v - v_parallel
+        
+        result = (
+            -sin_norm * torch.sum(v * w_unit, dim=-1, keepdim=True) * p
+            + cos_norm * v_perp
+            + torch.sum(v * w_unit, dim=-1, keepdim=True) * q
+        )
         
         return result
     
