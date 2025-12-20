@@ -45,52 +45,55 @@ class ManifoldTensor(torch.Tensor):
     
     def __add__(self, other):
         """Addition with TangentTensor or other tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            # Convert both to plain tensors and add
-            return torch.as_tensor(self) + torch.as_tensor(other)
-        return torch.as_tensor(self) + other
+            return torch.Tensor.__add__(self, other)
+        return torch.Tensor.__add__(self, other)
     
     def __radd__(self, other):
         """Reverse addition."""
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(other) + torch.as_tensor(self)
-        return other + torch.as_tensor(self)
+            return torch.Tensor.__add__(other, self)
+        return torch.Tensor.__radd__(self, other)
     
     def __mul__(self, other):
         """Multiplication with scalars or other tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(self) * torch.as_tensor(other)
-        return torch.as_tensor(self) * other
+            return torch.Tensor.__mul__(self, other)
+        return torch.Tensor.__mul__(self, other)
     
     def __rmul__(self, other):
         """Reverse multiplication."""
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(other) * torch.as_tensor(self)
-        return other * torch.as_tensor(self)
+            return torch.Tensor.__mul__(other, self)
+        return torch.Tensor.__rmul__(self, other)
     
     def __truediv__(self, other):
         """Division by scalars or tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(self) / torch.as_tensor(other)
-        return torch.as_tensor(self) / other
+            return torch.Tensor.__truediv__(self, other)
+        return torch.Tensor.__truediv__(self, other)
     
     def __rtruediv__(self, other):
         """Reverse division."""
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(other) / torch.as_tensor(self)
-        return other / torch.as_tensor(self)
+            return torch.Tensor.__truediv__(other, self)
+        return torch.Tensor.__rtruediv__(self, other)
     
     def __sub__(self, other):
         """Subtraction."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(self) - torch.as_tensor(other)
-        return torch.as_tensor(self) - other
+            return torch.Tensor.__sub__(self, other)
+        return torch.Tensor.__sub__(self, other)
     
     def __rsub__(self, other):
         """Reverse subtraction."""
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            return torch.as_tensor(other) - torch.as_tensor(self)
-        return other - torch.as_tensor(self)
+            return torch.Tensor.__sub__(other, self)
+        return torch.Tensor.__rsub__(self, other)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -113,8 +116,9 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             Self after projection
         """
-        # Convert self to plain tensor, project it, then copy back in-place
-        p_data = torch.as_tensor(self)
+        # Create plain tensor view to pass to manifold methods
+        # Use .detach() to get a plain tensor without triggering __torch_function__
+        p_data = self.detach()
         projected = self.manifold.project(p_data)
         # Use torch.Tensor methods to avoid triggering __torch_function__
         torch.Tensor.copy_(self, projected)
@@ -130,9 +134,9 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             New point on manifold after exponential map
         """
-        # Convert to plain torch.Tensor to avoid type issues in manifold methods
-        p_data = torch.as_tensor(self)
-        v_data = torch.as_tensor(v)
+        # Use .detach() to get plain tensor views
+        p_data = self.detach()
+        v_data = v.detach() if isinstance(v, (ManifoldTensor, TangentTensor)) else v
         result = self.manifold.exp(p_data, v_data)
         return ManifoldTensor(result, manifold=self.manifold)
     
@@ -151,9 +155,9 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        # Convert to plain torch.Tensor
-        p_data = torch.as_tensor(self)
-        q_data = torch.as_tensor(q)
+        # Use .detach() to get plain tensor views
+        p_data = self.detach()
+        q_data = q.detach()
         return self.manifold.log(p_data, q_data)
     
     def distance(self, q: 'ManifoldTensor') -> Tensor:
@@ -171,9 +175,9 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        # Convert to plain torch.Tensor
-        p_data = torch.as_tensor(self)
-        q_data = torch.as_tensor(q)
+        # Use .detach() to get plain tensor views
+        p_data = self.detach()
+        q_data = q.detach()
         return self.manifold.distance(p_data, q_data)
     
     def geodesic_to(self, q: 'ManifoldTensor', t: float) -> 'ManifoldTensor':
@@ -192,9 +196,9 @@ class ManifoldTensor(torch.Tensor):
         if q.manifold != self.manifold:
             raise ValueError("Points must be on the same manifold")
         
-        # Convert to plain torch.Tensor
-        p_data = torch.as_tensor(self)
-        q_data = torch.as_tensor(q)
+        # Use .detach() to get plain tensor views
+        p_data = self.detach()
+        q_data = q.detach()
         result = self.manifold.geodesic(p_data, q_data, t)
         return ManifoldTensor(result, manifold=self.manifold)
 
@@ -235,52 +239,55 @@ class TangentTensor(torch.Tensor):
     
     def __add__(self, other):
         """Addition with ManifoldTensor or other tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            # Convert both to plain tensors and add
-            return torch.as_tensor(self) + torch.as_tensor(other)
-        return torch.as_tensor(self) + other
+            return torch.Tensor.__add__(self, other)
+        return torch.Tensor.__add__(self, other)
     
     def __radd__(self, other):
         """Reverse addition."""
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(other) + torch.as_tensor(self)
-        return other + torch.as_tensor(self)
+            return torch.Tensor.__add__(other, self)
+        return torch.Tensor.__radd__(self, other)
     
     def __mul__(self, other):
         """Multiplication with scalars or other tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(self) * torch.as_tensor(other)
-        return torch.as_tensor(self) * other
+            return torch.Tensor.__mul__(self, other)
+        return torch.Tensor.__mul__(self, other)
     
     def __rmul__(self, other):
         """Reverse multiplication."""
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(other) * torch.as_tensor(self)
-        return other * torch.as_tensor(self)
+            return torch.Tensor.__mul__(other, self)
+        return torch.Tensor.__rmul__(self, other)
     
     def __truediv__(self, other):
         """Division by scalars or tensors."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(self) / torch.as_tensor(other)
-        return torch.as_tensor(self) / other
+            return torch.Tensor.__truediv__(self, other)
+        return torch.Tensor.__truediv__(self, other)
     
     def __rtruediv__(self, other):
         """Reverse division."""
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(other) / torch.as_tensor(self)
-        return other / torch.as_tensor(self)
+            return torch.Tensor.__truediv__(other, self)
+        return torch.Tensor.__rtruediv__(self, other)
     
     def __sub__(self, other):
         """Subtraction."""
+        # Use torch.Tensor methods directly to avoid __torch_function__ recursion
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(self) - torch.as_tensor(other)
-        return torch.as_tensor(self) - other
+            return torch.Tensor.__sub__(self, other)
+        return torch.Tensor.__sub__(self, other)
     
     def __rsub__(self, other):
         """Reverse subtraction."""
         if isinstance(other, (ManifoldTensor, TangentTensor)):
-            return torch.as_tensor(other) - torch.as_tensor(self)
-        return other - torch.as_tensor(self)
+            return torch.Tensor.__sub__(other, self)
+        return torch.Tensor.__rsub__(self, other)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
