@@ -113,8 +113,11 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             Self after projection
         """
-        projected = self.manifold.project(self)
-        self.data.copy_(projected)
+        # Convert self to plain tensor, project it, then copy back in-place
+        p_data = torch.as_tensor(self)
+        projected = self.manifold.project(p_data)
+        # Use torch.Tensor methods to avoid triggering __torch_function__
+        torch.Tensor.copy_(self, projected)
         return self
     
     def exp(self, v: Tensor) -> 'ManifoldTensor':
