@@ -1,5 +1,6 @@
 """Tests for ManifoldTensor and TangentTensor."""
 
+import pytest
 import torch
 from geotorch import Sphere, Euclidean, ManifoldTensor, TangentTensor
 
