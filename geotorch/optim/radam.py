@@ -27,6 +27,8 @@ class RiemannianAdam(Optimizer):
             Applied as Riemannian regularization in tangent space.
         amsgrad (bool, optional): Whether to use AMSGrad variant (default: False).
         stabilize (bool, optional): Apply periodic manifold projection (default: True).
+        stabilize_period (int, optional): Number of steps between stabilization
+            projections (default: 10).
     
     Example:
         >>> from geotorch import Sphere
@@ -59,6 +61,7 @@ class RiemannianAdam(Optimizer):
         weight_decay: float = 0,
         amsgrad: bool = False,
         stabilize: bool = True,
+        stabilize_period: int = 10,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -70,6 +73,8 @@ class RiemannianAdam(Optimizer):
             raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
         if weight_decay < 0.0:
             raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        if stabilize_period <= 0:
+            raise ValueError(f"Invalid stabilize_period: {stabilize_period}")
         
         defaults = dict(
             lr=lr,
@@ -78,6 +83,7 @@ class RiemannianAdam(Optimizer):
             weight_decay=weight_decay,
             amsgrad=amsgrad,
             stabilize=stabilize,
+            stabilize_period=stabilize_period,
         )
         super(RiemannianAdam, self).__init__(params, defaults)
     
@@ -87,6 +93,7 @@ class RiemannianAdam(Optimizer):
         for group in self.param_groups:
             group.setdefault('amsgrad', False)
             group.setdefault('stabilize', True)
+            group.setdefault('stabilize_period', 10)
     
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
@@ -111,6 +118,7 @@ class RiemannianAdam(Optimizer):
             weight_decay = group['weight_decay']
             amsgrad = group['amsgrad']
             stabilize = group['stabilize']
+            stabilize_period = group['stabilize_period']
             
             for param in group['params']:
                 if param.grad is None:
@@ -153,8 +161,9 @@ class RiemannianAdam(Optimizer):
                         )
                         # For second moment, we use a simpler approach:
                         # Element-wise absolute value after transport to ensure non-negativity
-                        # This is a practical approximation; exact second moment transport
-                        # on manifolds is an active research area
+                        # TODO: Investigate more sophisticated second moment transport methods
+                        # See: Becigneul & Ganea (2019) "Riemannian Adaptive Optimization Methods"
+                        # for potential improvements using vector transport or retraction-based methods
                         state['exp_avg_sq'] = torch.abs(manifold.parallel_transport(
                             state['exp_avg_sq'], prev, param.data
                         ))
@@ -199,7 +208,7 @@ class RiemannianAdam(Optimizer):
                     param.data = manifold.exp(param.data, direction)
                     
                     # Periodic stabilization (project back to manifold)
-                    if stabilize and state['step'] % 10 == 0:
+                    if stabilize and state['step'] % stabilize_period == 0:
                         param.data = manifold.project(param.data)
                 else:
                     # Standard Euclidean update

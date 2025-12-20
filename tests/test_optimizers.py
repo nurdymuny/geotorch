@@ -218,13 +218,11 @@ class TestRiemannianSGD:
             optimizer.step()
             
             # Check momentum norm is preserved (approximately)
-            # Note: There may be small numerical differences
+            # Parallel transport should preserve norms well (allow 10% tolerance)
             momentum_norm_after = state['momentum_buffer'].norm().item()
-            # Allow some tolerance due to parallel transport numerics and momentum updates
-            # This is testing that the norm is roughly preserved, not exact equality
             if momentum_norm_before > 1e-6:  # Only test if momentum is non-trivial
                 relative_change = abs(momentum_norm_after - momentum_norm_before) / momentum_norm_before
-                assert relative_change < 0.5, \
+                assert relative_change < 0.1, \
                     f"Momentum norm changed too much: {momentum_norm_before:.6e} -> {momentum_norm_after:.6e}"
     
     def test_euclidean_fallback(self):
@@ -406,11 +404,15 @@ class TestRiemannianAdam:
             exp_avg_norm_after = state['exp_avg'].norm().item()
             exp_avg_sq_norm_after = state['exp_avg_sq'].norm().item()
             
-            # Allow some tolerance due to parallel transport and updates
-            if exp_avg_norm_before > 0:
-                assert abs(exp_avg_norm_after - exp_avg_norm_before) < 0.2 * exp_avg_norm_before
-            if exp_avg_sq_norm_before > 0:
-                assert abs(exp_avg_sq_norm_after - exp_avg_sq_norm_before) < 0.2 * exp_avg_sq_norm_before
+            # Parallel transport should preserve norms well (allow 10% tolerance)
+            if exp_avg_norm_before > 1e-6:
+                relative_change = abs(exp_avg_norm_after - exp_avg_norm_before) / exp_avg_norm_before
+                assert relative_change < 0.1, \
+                    f"First moment norm changed too much: {exp_avg_norm_before:.6e} -> {exp_avg_norm_after:.6e}"
+            if exp_avg_sq_norm_before > 1e-6:
+                relative_change = abs(exp_avg_sq_norm_after - exp_avg_sq_norm_before) / exp_avg_sq_norm_before
+                assert relative_change < 0.1, \
+                    f"Second moment norm changed too much: {exp_avg_sq_norm_before:.6e} -> {exp_avg_sq_norm_after:.6e}"
     
     def test_amsgrad_variant(self):
         """AMSGrad variant should work correctly."""

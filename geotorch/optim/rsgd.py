@@ -29,6 +29,8 @@ class RiemannianSGD(Optimizer):
             before update.
         stabilize (bool, optional): Apply periodic manifold projection to
             counteract numerical drift (default: True).
+        stabilize_period (int, optional): Number of steps between stabilization
+            projections (default: 10).
     
     Example:
         >>> from geotorch import Sphere
@@ -62,6 +64,7 @@ class RiemannianSGD(Optimizer):
         nesterov: bool = False,
         grad_clip: Optional[float] = None,
         stabilize: bool = True,
+        stabilize_period: int = 10,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -73,6 +76,8 @@ class RiemannianSGD(Optimizer):
             raise ValueError(f"Invalid grad_clip value: {grad_clip}")
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
+        if stabilize_period <= 0:
+            raise ValueError(f"Invalid stabilize_period: {stabilize_period}")
         
         defaults = dict(
             lr=lr,
@@ -82,6 +87,7 @@ class RiemannianSGD(Optimizer):
             nesterov=nesterov,
             grad_clip=grad_clip,
             stabilize=stabilize,
+            stabilize_period=stabilize_period,
         )
         super(RiemannianSGD, self).__init__(params, defaults)
         
@@ -94,6 +100,7 @@ class RiemannianSGD(Optimizer):
             group.setdefault('nesterov', False)
             group.setdefault('grad_clip', None)
             group.setdefault('stabilize', True)
+            group.setdefault('stabilize_period', 10)
     
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]:
@@ -119,6 +126,7 @@ class RiemannianSGD(Optimizer):
             grad_clip = group['grad_clip']
             lr = group['lr']
             stabilize = group['stabilize']
+            stabilize_period = group['stabilize_period']
             
             for param in group['params']:
                 if param.grad is None:
@@ -177,7 +185,7 @@ class RiemannianSGD(Optimizer):
                     param.data = manifold.exp(param.data, -lr * grad)
                     
                     # Periodic stabilization (project back to manifold)
-                    if stabilize and self._step_count % 10 == 0:
+                    if stabilize and self._step_count % stabilize_period == 0:
                         param.data = manifold.project(param.data)
                 else:
                     # Standard Euclidean update
