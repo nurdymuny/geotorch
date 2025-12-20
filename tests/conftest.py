@@ -23,14 +23,15 @@ def hyperbolic():
     return Hyperbolic(64, model='poincare')
 
 
-@pytest.fixture(params=[
-    Euclidean(64),
-    Sphere(64),
-    Hyperbolic(64, model='poincare')
-])
+@pytest.fixture(params=['euclidean', 'sphere', 'hyperbolic'])
 def manifold(request):
     """Fixture that parametrizes over all manifolds."""
-    return request.param
+    if request.param == 'euclidean':
+        return Euclidean(64)
+    elif request.param == 'sphere':
+        return Sphere(64)
+    elif request.param == 'hyperbolic':
+        return Hyperbolic(64, model='poincare')
 
 
 @pytest.fixture
