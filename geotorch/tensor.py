@@ -134,9 +134,9 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             New point on manifold after exponential map
         """
-        # Use .detach() to get plain tensor views
-        p_data = self.detach()
-        v_data = v.detach() if isinstance(v, (ManifoldTensor, TangentTensor)) else v
+        # Convert to plain tensors to avoid subclass dispatch issues
+        p_data = torch.Tensor(self)
+        v_data = torch.Tensor(v) if isinstance(v, (ManifoldTensor, TangentTensor)) else v
         result = self.manifold.exp(p_data, v_data)
         return ManifoldTensor(result, manifold=self.manifold)
     
@@ -311,7 +311,11 @@ class TangentTensor(torch.Tensor):
         Returns:
             Transported tangent vector at q
         """
-        transported = self.manifold.parallel_transport(self, self.base_point, q)
+        # Convert to plain tensors to avoid subclass dispatch issues
+        v_data = torch.Tensor(self)
+        p_data = torch.Tensor(self.base_point) if isinstance(self.base_point, (ManifoldTensor, TangentTensor)) else self.base_point
+        q_data = torch.Tensor(q) if isinstance(q, (ManifoldTensor, TangentTensor)) else q
+        transported = self.manifold.parallel_transport(v_data, p_data, q_data)
         return TangentTensor(transported, base_point=q, manifold=self.manifold)
     
     def norm(self) -> Tensor:

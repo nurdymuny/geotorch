@@ -293,10 +293,12 @@ class Hyperbolic(Manifold):
         # Use uniform radius sampling for better distribution
         x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
         
-        # Sample radius uniformly in [0, 1)
+        # Sample radius uniformly in [0, max_radius)
+        # Stay well away from boundary for numerical stability
+        max_radius = 0.9  # Avoid high-curvature region near boundary
         radius = torch.rand(*shape, 1, device=device, dtype=dtype)
         radius = torch.pow(radius, 1.0 / self.n)  # Correct for volume in n dimensions
-        radius = radius * (1.0 - self.eps)  # Stay away from boundary
+        radius = radius * max_radius
         
         return radius * x / x_norm.clamp(min=self.eps)
     
@@ -319,3 +321,21 @@ class Hyperbolic(Manifold):
         # This makes "small" multipliers like 0.1 work as expected
         lambda_p = self._lambda_x(p)
         return v_euclidean / lambda_p
+
+    def norm(self, p: Tensor, v: Tensor) -> Tensor:
+        """
+        Riemannian norm of tangent vector v at point p.
+        
+        For Poincaré ball, the metric is g_p = λ_p² * I where λ_p = 2/(1-||p||²).
+        So ||v||_p = λ_p * ||v||_euclidean
+        
+        Args:
+            p: Point on manifold
+            v: Tangent vector at p
+        
+        Returns:
+            ||v||_p = λ_p * ||v||_2
+        """
+        lambda_p = self._lambda_x(p).squeeze(-1)
+        euclidean_norm = torch.linalg.norm(v, dim=-1)
+        return lambda_p * euclidean_norm

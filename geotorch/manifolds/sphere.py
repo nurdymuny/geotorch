@@ -131,7 +131,7 @@ class Sphere(Manifold):
         """Geodesic distance on the sphere.
         
         The distance is the angle between the two unit vectors:
-            d(p, q) = arccos(clamp(p·q, -1, 1))
+            d(p, q) = arccos(clamp(p·q / (||p|| ||q||), -1, 1))
         
         Args:
             p: First point on sphere
@@ -140,9 +140,25 @@ class Sphere(Manifold):
         Returns:
             Geodesic distance (angle in radians), always non-negative
         """
+        # Normalize dot product by actual norms to handle float32 precision issues
+        # where ||p|| might be 0.9999999 instead of exactly 1.0
         dot_pq = torch.sum(p * q, dim=-1)
-        dot_pq = torch.clamp(dot_pq, -1.0 + self._eps, 1.0 - self._eps)
-        dist = torch.acos(dot_pq)
+        norm_p = torch.linalg.norm(p, dim=-1)
+        norm_q = torch.linalg.norm(q, dim=-1)
+        cos_angle = dot_pq / (norm_p * norm_q).clamp(min=self._eps)
+        
+        # Clamp to [-1, 1] for numerical stability
+        cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
+        
+        # For cos_angle very close to ±1, return 0 or π directly to avoid
+        # float32 precision issues where acos(0.9999999) ≈ 0.0005
+        # Use 1e-5 threshold which corresponds to ~0.003 radians
+        near_one_threshold = 1e-5
+        dist = torch.where(
+            cos_angle > 1.0 - near_one_threshold,
+            torch.zeros_like(cos_angle),
+            torch.acos(cos_angle)
+        )
         # Ensure non-negative (clamp small negative artifacts to zero)
         return torch.clamp(dist, min=0.0)
     
