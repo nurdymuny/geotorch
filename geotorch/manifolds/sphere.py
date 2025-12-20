@@ -206,3 +206,23 @@ class Sphere(Manifold):
         full_shape = shape + (self._ambient_dim,)
         x = torch.randn(full_shape, device=device, dtype=dtype)
         return self.project(x)
+    
+    def random_tangent(self, p: Tensor) -> Tensor:
+        """Generate random tangent vector at point p on the sphere.
+        
+        Samples a random vector in ambient space, projects it onto the
+        tangent space at p (orthogonal to p), and normalizes it.
+        
+        Args:
+            p: Point on sphere
+        
+        Returns:
+            Random unit-norm tangent vector at p
+        """
+        # Sample random vector in ambient space
+        v = torch.randn_like(p)
+        # Project onto tangent space (remove component parallel to p)
+        v = v - (v * p).sum(dim=-1, keepdim=True) * p
+        # Normalize to unit norm
+        v_norm = v.norm(dim=-1, keepdim=True).clamp_min(self._eps)
+        return v / v_norm
