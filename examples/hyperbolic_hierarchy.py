@@ -1,6 +1,6 @@
 """
-🔥 HYPERBOLIC EMBEDDINGS: Learning Hierarchies in Curved Space 🔥
-=================================================================
+HYPERBOLIC EMBEDDINGS: Learning Hierarchies in Curved Space
+=============================================================
 
 This demo shows why hyperbolic geometry is a game-changer for hierarchical data.
 
@@ -24,7 +24,7 @@ THIS DEMO:
 Based on: "Poincaré Embeddings for Learning Hierarchical Representations"
           Nickel & Kiela, NeurIPS 2017 (Facebook AI Research)
 
-🚀 BLACKWELL MODE: ENGAGED 🚀
+BLACKWELL MODE: ENGAGED
 """
 
 import torch
@@ -43,33 +43,33 @@ from geotorch.nn import ManifoldParameter
 from geotorch.optim import RiemannianSGD, RiemannianAdam
 
 # =============================================================================
-# CONFIGURATION - CRANK IT UP 🔥
+# CONFIGURATION
 # =============================================================================
 
 CONFIG = {
     # Hierarchy parameters
-    'branching_factor': 4,      # Children per node
-    'max_depth': 6,             # Tree depth (4^6 = 4096 leaves)
+    'branching_factor': 3,      # Children per node (reduced for speed)
+    'max_depth': 4,             # Tree depth (3^4 = 81 leaves, ~120 nodes total)
     
     # Embedding parameters  
     'embedding_dim': 32,        # Embedding dimension
-    'hyperbolic_dim': 2,        # For visualization (2D Poincaré disk)
+    'hyperbolic_dim': 2,        # For visualization (2D Poincare disk)
     
     # Training parameters
-    'n_epochs': 100,
-    'batch_size': 4096,         # Large batches for GPU efficiency
+    'n_epochs': 50,
+    'batch_size': 512,          # Reasonable batch size
     'lr': 0.1,
-    'n_negatives': 50,          # Negative samples per positive
+    'n_negatives': 10,          # Negative samples per positive
     'margin': 0.1,
     
     # Device
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
 }
 
-print(f"🖥️  Device: {CONFIG['device'].upper()}")
+print(f"Device: {CONFIG['device'].upper()}")
 if CONFIG['device'] == 'cuda':
-    print(f"🎮 GPU: {torch.cuda.get_device_name()}")
-    print(f"💾 Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    print(f"GPU: {torch.cuda.get_device_name()}")
+    print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 
 # =============================================================================
@@ -474,7 +474,7 @@ def visualize_poincare_disk(model, nodes, edges, depths, title, filename):
     
     plt.tight_layout()
     plt.savefig(filename, dpi=150, bbox_inches='tight')
-    print(f"  📊 Saved: {filename}")
+    print(f"  Saved: {filename}")
     plt.close()
 
 
@@ -516,7 +516,7 @@ def plot_training_comparison(hyp_history, euc_history, filename):
     
     plt.tight_layout()
     plt.savefig(filename, dpi=150)
-    print(f"  📊 Saved: {filename}")
+    print(f"  Saved: {filename}")
     plt.close()
 
 
@@ -526,7 +526,7 @@ def plot_training_comparison(hyp_history, euc_history, filename):
 
 def main():
     print("\n" + "=" * 70)
-    print("🔥 HYPERBOLIC EMBEDDINGS: Learning Hierarchies in Curved Space 🔥")
+    print("HYPERBOLIC EMBEDDINGS: Learning Hierarchies in Curved Space")
     print("=" * 70)
     
     device = CONFIG['device']
@@ -534,7 +534,7 @@ def main():
     # =========================================================================
     # GENERATE HIERARCHY
     # =========================================================================
-    print("\n📊 Generating synthetic hierarchy...")
+    print("\nGenerating synthetic hierarchy...")
     
     nodes, edges, depths, node_names = generate_tree(
         CONFIG['branching_factor'], 
@@ -553,13 +553,13 @@ def main():
     print(f"  Branching factor: {CONFIG['branching_factor']}")
     
     # Compute tree distances (for evaluation)
-    print("\n🔍 Computing tree distances...")
+    print("\nComputing tree distances...")
     start = time.time()
     distances = compute_tree_distances(nodes, edges)
     print(f"  Done in {time.time() - start:.1f}s")
     
     # Sample training pairs
-    print("\n🎲 Sampling training pairs...")
+    print("\nSampling training pairs...")
     pairs, labels = sample_training_pairs(
         nodes, edges, depths, 
         n_samples=min(50000, n_edges),
@@ -573,7 +573,7 @@ def main():
     # TRAIN HYPERBOLIC EMBEDDING
     # =========================================================================
     print("\n" + "=" * 70)
-    print("🌀 Training HYPERBOLIC embedding (Poincaré ball + GeoTorch)")
+    print("Training HYPERBOLIC embedding (Poincare ball + GeoTorch)")
     print("=" * 70)
     
     hyp_model = HyperbolicEmbedding(n_nodes, CONFIG['hyperbolic_dim'], device)
@@ -584,7 +584,7 @@ def main():
         CONFIG['n_epochs'], CONFIG['batch_size'], device
     )
     
-    print("\n📈 Evaluating hyperbolic embedding...")
+    print("\nEvaluating hyperbolic embedding...")
     hyp_metrics = evaluate_embedding(hyp_model, nodes, edges, depths, distances, device)
     print(f"  MAP (edge reconstruction): {hyp_metrics['MAP']:.4f}")
     print(f"  Depth-norm correlation:    {hyp_metrics['depth_correlation']:.4f}")
@@ -594,7 +594,7 @@ def main():
     # TRAIN EUCLIDEAN EMBEDDING (BASELINE)
     # =========================================================================
     print("\n" + "=" * 70)
-    print("📐 Training EUCLIDEAN embedding (baseline)")
+    print("Training EUCLIDEAN embedding (baseline)")
     print("=" * 70)
     
     euc_model = EuclideanEmbedding(n_nodes, CONFIG['hyperbolic_dim'], device)
@@ -605,7 +605,7 @@ def main():
         CONFIG['n_epochs'], CONFIG['batch_size'], device
     )
     
-    print("\n📈 Evaluating Euclidean embedding...")
+    print("\nEvaluating Euclidean embedding...")
     euc_metrics = evaluate_embedding(euc_model, nodes, edges, depths, distances, device)
     print(f"  MAP (edge reconstruction): {euc_metrics['MAP']:.4f}")
     print(f"  Depth-norm correlation:    {euc_metrics['depth_correlation']:.4f}")
@@ -615,26 +615,26 @@ def main():
     # COMPARISON & VISUALIZATION
     # =========================================================================
     print("\n" + "=" * 70)
-    print("📊 RESULTS COMPARISON")
+    print("RESULTS COMPARISON")
     print("=" * 70)
     
     print("""
-┌────────────────────┬─────────────────┬─────────────────┐
-│ Metric             │ Hyperbolic      │ Euclidean       │
-├────────────────────┼─────────────────┼─────────────────┤""")
-    print(f"│ MAP                │ {hyp_metrics['MAP']:>15.4f} │ {euc_metrics['MAP']:>15.4f} │")
-    print(f"│ Depth Correlation  │ {hyp_metrics['depth_correlation']:>15.4f} │ {euc_metrics['depth_correlation']:>15.4f} │")
-    print(f"│ Distortion         │ {hyp_metrics['distortion']:>15.4f} │ {euc_metrics['distortion']:>15.4f} │")
-    print(f"│ Final Loss         │ {hyp_history['loss'][-1]:>15.4f} │ {euc_history['loss'][-1]:>15.4f} │")
-    print(f"│ Training Time      │ {hyp_history['time'][-1]:>14.1f}s │ {euc_history['time'][-1]:>14.1f}s │")
-    print("└────────────────────┴─────────────────┴─────────────────┘")
++--------------------+-----------------+-----------------+
+| Metric             | Hyperbolic      | Euclidean       |
++--------------------+-----------------+-----------------+""")
+    print(f"| MAP                | {hyp_metrics['MAP']:>15.4f} | {euc_metrics['MAP']:>15.4f} |")
+    print(f"| Depth Correlation  | {hyp_metrics['depth_correlation']:>15.4f} | {euc_metrics['depth_correlation']:>15.4f} |")
+    print(f"| Distortion         | {hyp_metrics['distortion']:>15.4f} | {euc_metrics['distortion']:>15.4f} |")
+    print(f"| Final Loss         | {hyp_history['loss'][-1]:>15.4f} | {euc_history['loss'][-1]:>15.4f} |")
+    print(f"| Training Time      | {hyp_history['time'][-1]:>14.1f}s | {euc_history['time'][-1]:>14.1f}s |")
+    print("+--------------------+-----------------+-----------------+")
     
     # Visualization
-    print("\n🎨 Generating visualizations...")
+    print("\nGenerating visualizations...")
     
     visualize_poincare_disk(
         hyp_model, nodes, edges, depths,
-        f"Hyperbolic Embedding (Poincaré Disk)\n{n_nodes:,} nodes, MAP={hyp_metrics['MAP']:.3f}",
+        f"Hyperbolic Embedding (Poincare Disk)\n{n_nodes:,} nodes, MAP={hyp_metrics['MAP']:.3f}",
         "hyperbolic_embedding.png"
     )
     
@@ -650,24 +650,24 @@ def main():
     # KEY INSIGHT
     # =========================================================================
     print("\n" + "=" * 70)
-    print("💡 KEY INSIGHT: Why Hyperbolic Wins")
+    print("KEY INSIGHT: Why Hyperbolic Wins")
     print("=" * 70)
     print("""
-🌳 TREES GROW EXPONENTIALLY:
+TREES GROW EXPONENTIALLY:
    - A tree with branching factor b and depth d has O(b^d) nodes
-   - Our tree: 4^6 = 4,096 leaf nodes
+   - Our tree: 3^4 = 81 leaf nodes
    
-📐 EUCLIDEAN SPACE IS TOO SMALL:
+EUCLIDEAN SPACE IS TOO SMALL:
    - R^n has polynomial volume growth: O(r^n)
    - To embed a tree faithfully, you need n ~ O(b^d) dimensions!
    - That's why the Euclidean embedding has HIGH distortion
    
-🌀 HYPERBOLIC SPACE IS JUST RIGHT:
-   - Poincaré ball has EXPONENTIAL volume growth near boundary
+HYPERBOLIC SPACE IS JUST RIGHT:
+   - Poincare ball has EXPONENTIAL volume growth near boundary
    - A 2D disk can embed trees that need 100+ Euclidean dimensions
    - Root at center, leaves at boundary (natural hierarchy!)
    
-📊 THE NUMBERS DON'T LIE:
+THE NUMBERS DON'T LIE:
 """)
     
     if hyp_metrics['MAP'] > euc_metrics['MAP']:
@@ -676,10 +676,10 @@ def main():
     
     if hyp_metrics['depth_correlation'] > euc_metrics['depth_correlation']:
         print(f"   Depth correlation: {hyp_metrics['depth_correlation']:.3f} vs {euc_metrics['depth_correlation']:.3f}")
-        print(f"   → Hyperbolic naturally encodes depth in norm!")
+        print(f"   -> Hyperbolic naturally encodes depth in norm!")
     
     print("""
-🚀 APPLICATIONS:
+APPLICATIONS:
    - Word embeddings (WordNet hierarchy)
    - Knowledge graphs (Freebase, Wikidata)
    - Social networks (follower trees)
@@ -687,14 +687,14 @@ def main():
    - Organizational charts
    - File system structures
 
-🔬 PAPERS TO READ:
-   - "Poincaré Embeddings" (Nickel & Kiela, NeurIPS 2017)
+PAPERS TO READ:
+   - "Poincare Embeddings" (Nickel & Kiela, NeurIPS 2017)
    - "Hyperbolic Neural Networks" (Ganea et al., NeurIPS 2018)
    - "Hyperbolic Graph Neural Networks" (Chami et al., NeurIPS 2019)
 """)
     
     print("=" * 70)
-    print("✅ EXPERIMENT COMPLETE")
+    print("EXPERIMENT COMPLETE")
     print("=" * 70)
 
 

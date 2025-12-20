@@ -164,6 +164,12 @@ class DavisCache:
             return spatial_binning(x, self.n_bins)
         elif self.method == 'lsh':
             return self.lsh(x, self.n_bins)
+        elif self.method == 'hybrid':
+            # Hybrid: combine curvature and spatial binning
+            curv_bins = curvature_binning(x, self.manifold, int(self.n_bins ** 0.5))
+            spat_bins = spatial_binning(x, int(self.n_bins ** 0.5))
+            # Combine: curv_bin * sqrt(n_bins) + spat_bin
+            return curv_bins * int(self.n_bins ** 0.5) + spat_bins
         else:
             raise ValueError(f"Unknown method: {self.method}")
     
