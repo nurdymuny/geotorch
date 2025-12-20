@@ -1,4 +1,4 @@
-"""Sphere manifold S^{n-1} embedded in R^n."""
+"""Sphere manifold."""
 
 import torch
 from torch import Tensor
@@ -6,120 +6,100 @@ from ..manifold import Manifold
 
 
 class Sphere(Manifold):
-    """
-    Unit sphere S^{n-1} embedded in R^n.
+    """Unit sphere S^{n-1} embedded in ℝⁿ.
     
-    Sphere(n) creates the set of unit vectors in R^n, which forms the 
-    (n-1)-dimensional sphere S^{n-1}.
+    The sphere consists of all points x in ℝⁿ such that ||x|| = 1.
+    Note: Sphere(n) creates the (n-1)-dimensional sphere S^{n-1} embedded in ℝⁿ.
     
-    Example:
-        >>> S = Sphere(64)  # S^63 embedded in R^64
-        >>> p = S.random_point()
-        >>> print(p.shape)  # torch.Size([64])
-        >>> print(torch.norm(p))  # tensor(1.0)
-        >>> print(S.dim)  # 63 (intrinsic dimension)
-    
-    Closed-form geodesic formulas:
-        - exp_p(v) = cos(||v||) * p + sin(||v||) * v / ||v||
-        - log_p(q) = θ * (q - cos(θ)*p) / sin(θ), where θ = arccos(p·q)
-        - distance(p, q) = arccos(p·q)
-    
-    Cut locus: Antipodal points (q = -p). log_p(-p) is undefined.
+    Geodesics are great circles, and the exponential/logarithmic maps have
+    closed-form expressions using trigonometric functions.
     
     Args:
-        n: Ambient dimension (points are in R^n, manifold is S^{n-1})
+        n: Ambient dimension (creates S^{n-1} sphere)
+    
+    Examples:
+        >>> S = Sphere(3)  # Creates S^2 (2-sphere) in R^3
+        >>> p = S.random_point()
+        >>> assert torch.allclose(torch.norm(p), torch.tensor(1.0))
     """
     
     def __init__(self, n: int):
-        self.n = n
-        self.eps = 1e-7  # For numerical stability
+        if n < 2:
+            raise ValueError(f"Sphere requires n >= 2, got {n}")
+        self._ambient_dim = n
+        self._dim = n - 1
+        self._eps = 1e-7  # For numerical stability
     
     @property
     def dim(self) -> int:
-        """Intrinsic dimension of the manifold."""
-        return self.n - 1
+        """Intrinsic dimension of the sphere (n-1 for S^{n-1})."""
+        return self._dim
     
     def exp(self, p: Tensor, v: Tensor) -> Tensor:
-        """
-        Exponential map: move from p along geodesic with velocity v.
+        """Exponential map on the sphere.
         
-        Formula: exp_p(v) = cos(||v||) * p + sin(||v||) * v / ||v||
+        Uses the closed-form formula:
+            exp_p(v) = cos(||v||) * p + sin(||v||) / ||v|| * v
         
         Args:
-            p: Point on manifold, shape (..., n)
-            v: Tangent vector at p, shape (..., n)
+            p: Point on sphere (unit vector)
+            v: Tangent vector at p (orthogonal to p)
         
         Returns:
-            Point on manifold after geodesic flow
+            Point on sphere after moving along geodesic
         """
-        v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        v = torch.as_tensor(v)
         
-        # Compute exp using stable formula
-        cos_norm = torch.cos(v_norm)
+        norm_v = torch.linalg.norm(v, dim=-1, keepdim=True)
         
-        # For sinc(x) = sin(x)/x, use Taylor approximation for small x
-        # sinc(x) ≈ 1 - x²/6 for |x| < eps
-        # Otherwise use sin(x)/x
-        v_norm_sq = v_norm * v_norm
-        sinc = torch.where(
-            v_norm < self.eps,
-            1.0 - v_norm_sq / 6.0,  # Taylor approximation
-            torch.sin(v_norm) / v_norm
-        )
+        # Handle zero vector case
+        norm_v = torch.clamp(norm_v, min=self._eps)
         
-        result = cos_norm * p + sinc * v
+        # Compute exponential map
+        result = torch.cos(norm_v) * p + torch.sin(norm_v) / norm_v * v
         
-        return result
+        # Ensure result is on sphere (numerical stability)
+        return result / torch.linalg.norm(result, dim=-1, keepdim=True)
     
     def log(self, p: Tensor, q: Tensor) -> Tensor:
-        """
-        Logarithmic map: tangent vector at p pointing toward q.
+        """Logarithmic map on the sphere.
         
-        Formula: log_p(q) = θ * (q - cos(θ)*p) / sin(θ), where θ = arccos(p·q)
+        Uses the closed-form formula:
+            log_p(q) = θ * (q - cos(θ)*p) / sin(θ)
+        where θ = arccos(clamp(p·q, -1, 1))
         
         Args:
-            p: Base point on manifold
-            q: Target point on manifold
+            p: Base point on sphere
+            q: Target point on sphere
         
         Returns:
-            Tangent vector v such that exp(p, v) = q
-            
-        Raises:
-            ValueError: If q is at or beyond the cut locus of p
+            Tangent vector at p pointing toward q
         """
-        # Compute dot product, clamped to [-1, 1] for numerical stability
-        dot = torch.sum(p * q, dim=-1, keepdim=True)
-        # Only clamp lower bound strictly to avoid antipodal issues
-        # Upper bound can be exactly 1.0 (for same point case)
-        dot = torch.clamp(dot, min=-1.0 + self.eps, max=1.0)
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
         
-        theta = torch.acos(dot)
+        # Compute angle between p and q
+        dot_pq = torch.sum(p * q, dim=-1, keepdim=True)
+        dot_pq = torch.clamp(dot_pq, -1.0 + self._eps, 1.0 - self._eps)
+        theta = torch.acos(dot_pq)
+        
+        # Handle case where p ≈ q (theta ≈ 0)
         sin_theta = torch.sin(theta)
+        sin_theta = torch.clamp(sin_theta, min=self._eps)
         
-        # Check for cut locus (antipodal points) - don't use .all() for batch support
-        in_domain = self.in_domain(p, q)
-        if torch.any(~in_domain):
-            raise ValueError("Target point is at or beyond the cut locus (antipodal point)")
-        
-        # For theta/sin(theta), use Taylor approximation for small theta
-        # theta/sin(theta) ≈ 1 + theta²/6 for |theta| < eps
-        # Otherwise use theta/sin(theta)
-        theta_sq = theta * theta
-        theta_over_sin = torch.where(
-            theta.abs() < self.eps,
-            1.0 + theta_sq / 6.0,  # Taylor approximation
-            theta / sin_theta
-        )
-        
-        result = theta_over_sin * (q - dot * p)
+        # Compute log map
+        result = theta / sin_theta * (q - dot_pq * p)
         
         return result
     
     def parallel_transport(self, v: Tensor, p: Tensor, q: Tensor) -> Tensor:
-        """
-        Parallel transport tangent vector v from T_pM to T_qM.
+        """Parallel transport on the sphere.
         
-        Uses the formula for parallel transport along geodesics on the sphere.
+        Uses the formula for parallel transport along a geodesic:
+            PT_p->q(v) = v - ((v·p) / (1 + p·q)) * (p + q)
         
         Args:
             v: Tangent vector at p
@@ -127,129 +107,124 @@ class Sphere(Manifold):
             q: Destination point
         
         Returns:
-            Tangent vector at q with same geometric properties as v
+            Parallel transported vector at q
         """
-        # Compute log_p(q)
-        w = self.log(p, q)
-        w_norm = torch.linalg.norm(w, dim=-1, keepdim=True)
+        # Ensure inputs are plain tensors (not subclasses)
+        v = torch.as_tensor(v)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
         
-        # Compute unit vector, handling small norms
-        # When w_norm is small, w_unit doesn't matter because cos(w_norm) ≈ 1
-        # and sin(w_norm) ≈ 0, so the formula reduces to v
-        w_unit = w / w_norm.clamp(min=self.eps)
+        dot_pq = torch.sum(p * q, dim=-1, keepdim=True)
+        dot_vp = torch.sum(v * p, dim=-1, keepdim=True)
         
-        # Parallel transport formula for sphere
-        cos_norm = torch.cos(w_norm)
-        sin_norm = torch.sin(w_norm)
+        # Avoid division by zero when p ≈ -q (antipodal points)
+        denom = 1.0 + dot_pq
+        denom = torch.where(torch.abs(denom) < self._eps, 
+                           torch.ones_like(denom) * self._eps, 
+                           denom)
         
-        v_parallel = torch.sum(v * w_unit, dim=-1, keepdim=True) * w_unit
-        v_perp = v - v_parallel
-        
-        result = (
-            -sin_norm * torch.sum(v * w_unit, dim=-1, keepdim=True) * p
-            + cos_norm * v_perp
-            + torch.sum(v * w_unit, dim=-1, keepdim=True) * q
-        )
+        result = v - (dot_vp / denom) * (p + q)
         
         return result
     
     def distance(self, p: Tensor, q: Tensor) -> Tensor:
-        """
-        Geodesic distance between points.
+        """Geodesic distance on the sphere.
         
-        Formula: distance(p, q) = arccos(p·q)
+        The distance is the angle between the two unit vectors:
+            d(p, q) = arccos(clamp(p·q, -1, 1))
         
         Args:
-            p: First point, shape (..., n)
-            q: Second point, shape (..., n)
+            p: First point on sphere
+            q: Second point on sphere
         
         Returns:
-            Distance, shape (...)
+            Geodesic distance (angle in radians), always non-negative
         """
-        dot = torch.sum(p * q, dim=-1)
-        # Only clamp lower bound strictly, upper can be exactly 1.0
-        dot = torch.clamp(dot, min=-1.0 + self.eps, max=1.0)
-        return torch.acos(dot)
+        dot_pq = torch.sum(p * q, dim=-1)
+        dot_pq = torch.clamp(dot_pq, -1.0 + self._eps, 1.0 - self._eps)
+        dist = torch.acos(dot_pq)
+        # Ensure non-negative (clamp small negative artifacts to zero)
+        return torch.clamp(dist, min=0.0)
     
     def project(self, x: Tensor) -> Tensor:
-        """
-        Project ambient space point onto manifold.
-        
-        Projects by normalizing to unit length.
+        """Project point onto sphere by normalization.
         
         Args:
-            x: Point in ambient space
+            x: Point in ambient space ℝⁿ
         
         Returns:
-            Closest point on manifold (normalized)
+            x / ||x|| (normalized to unit sphere)
         """
-        x_norm = torch.linalg.norm(x, dim=-1, keepdim=True)
-        return x / torch.clamp(x_norm, min=self.eps)
+        norm_x = torch.linalg.norm(x, dim=-1, keepdim=True)
+        norm_x = torch.clamp(norm_x, min=self._eps)
+        return x / norm_x
     
     def project_tangent(self, p: Tensor, v: Tensor) -> Tensor:
-        """
-        Project ambient vector onto tangent space at p.
+        """Project vector onto tangent space at p.
         
-        The tangent space at p is orthogonal to p, so we subtract the
-        radial component: v - (v·p)p
+        The tangent space at p consists of all vectors orthogonal to p:
+            proj_TpS(v) = v - (v·p) * p
         
         Args:
-            p: Point on manifold
+            p: Point on sphere
             v: Vector in ambient space
         
         Returns:
-            Component of v in T_pM
+            Component of v orthogonal to p
         """
-        dot = torch.sum(v * p, dim=-1, keepdim=True)
-        return v - dot * p
+        dot_vp = torch.sum(v * p, dim=-1, keepdim=True)
+        return v - dot_vp * p
     
     def in_domain(self, p: Tensor, q: Tensor) -> Tensor:
-        """
-        Check if log_p(q) is well-defined (q not at cut locus of p).
+        """Check if log_p(q) is well-defined.
         
-        The cut locus consists of antipodal points where p·q ≈ -1.
+        The logarithmic map is not well-defined at antipodal points
+        (the cut locus). Returns False when q ≈ -p.
         
         Args:
             p: Base point
             q: Target point
-            
+        
         Returns:
-            Boolean tensor, True if log_p(q) is defined
+            Boolean tensor, True if q is not antipodal to p
         """
-        dot = torch.sum(p * q, dim=-1)
-        # Not at cut locus if dot > -1 + eps
-        return dot > -1.0 + self.eps
+        dot_pq = torch.sum(p * q, dim=-1)
+        # Check if points are approximately antipodal (dot product ≈ -1)
+        return torch.all(dot_pq > -1.0 + self._eps)
     
     def random_point(self, *shape, device=None, dtype=None) -> Tensor:
-        """
-        Generate random point(s) on manifold.
+        """Generate random point(s) uniformly on the sphere.
         
-        Samples from standard normal distribution and normalizes.
+        Uses the standard method of normalizing Gaussian random vectors.
         
         Args:
-            *shape: Shape of points to generate (excluding final dimension n)
-            device: Device to create tensor on
-            dtype: Data type of tensor
+            *shape: Shape of the output (batch dimensions)
+            device: PyTorch device
+            dtype: PyTorch dtype
         
         Returns:
-            Random point(s) on manifold
+            Random point(s) on the unit sphere
         """
-        if not shape:
-            shape = ()
-        x = torch.randn(*shape, self.n, device=device, dtype=dtype)
+        full_shape = shape + (self._ambient_dim,)
+        x = torch.randn(full_shape, device=device, dtype=dtype)
         return self.project(x)
     
     def random_tangent(self, p: Tensor) -> Tensor:
-        """
-        Generate random tangent vector at p.
+        """Generate random tangent vector at point p on the sphere.
         
-        Samples from standard normal and projects to tangent space.
+        Samples a random vector in ambient space, projects it onto the
+        tangent space at p (orthogonal to p), and normalizes it.
         
         Args:
-            p: Point on manifold
+            p: Point on sphere
         
         Returns:
-            Random tangent vector at p
+            Random unit-norm tangent vector at p
         """
+        # Sample random vector in ambient space
         v = torch.randn_like(p)
-        return self.project_tangent(p, v)
+        # Project onto tangent space (remove component parallel to p)
+        v = v - (v * p).sum(dim=-1, keepdim=True) * p
+        # Normalize to unit norm
+        v_norm = v.norm(dim=-1, keepdim=True).clamp_min(self._eps)
+        return v / v_norm

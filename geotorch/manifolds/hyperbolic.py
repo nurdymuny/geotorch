@@ -94,6 +94,10 @@ class Hyperbolic(Manifold):
         if self.model != 'poincare':
             raise NotImplementedError("Only Poincaré model is implemented")
         
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        v = torch.as_tensor(v)
+        
         v_norm = torch.linalg.norm(v, dim=-1, keepdim=True)
         lambda_p = self._lambda_x(p)
         
@@ -125,6 +129,10 @@ class Hyperbolic(Manifold):
         if self.model != 'poincare':
             raise NotImplementedError("Only Poincaré model is implemented")
         
+        # Ensure inputs are plain tensors (not subclasses)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
+        
         # Compute -p ⊕ q
         minus_p = -p
         diff = self._mobius_add(minus_p, q)
@@ -154,6 +162,11 @@ class Hyperbolic(Manifold):
         """
         if self.model != 'poincare':
             raise NotImplementedError("Only Poincaré model is implemented")
+        
+        # Ensure inputs are plain tensors (not subclasses)
+        v = torch.as_tensor(v)
+        p = torch.as_tensor(p)
+        q = torch.as_tensor(q)
         
         lambda_p = self._lambda_x(p)
         lambda_q = self._lambda_x(q)
@@ -189,7 +202,9 @@ class Hyperbolic(Manifold):
         arcosh_arg = 1.0 + 2.0 * diff_sqnorm / denominator
         arcosh_arg = torch.clamp(arcosh_arg, min=1.0)
         
-        return torch.acosh(arcosh_arg)
+        dist = torch.acosh(arcosh_arg)
+        # Ensure non-negative (clamp small negative artifacts to zero)
+        return torch.clamp(dist, min=0.0)
     
     def project(self, x: Tensor) -> Tensor:
         """

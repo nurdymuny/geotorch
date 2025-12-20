@@ -84,7 +84,7 @@ class TestManifoldProperties:
     
     def test_projection_is_idempotent(self, manifold):
         """project(project(x)) = project(x)"""
-        x = torch.randn(manifold.dim + 1)
+        x = torch.randn_like(manifold.random_point())  # Ambient space
         p1 = manifold.project(x)
         p2 = manifold.project(p1)
         assert torch.allclose(p1, p2, atol=1e-6)
