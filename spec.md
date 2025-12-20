@@ -1545,10 +1545,1256 @@ git push origin v0.1.0
 - [x] Basic tests
 
 ### Phase 2: Optimization (v0.2)
-- [ ] `RiemannianSGD`
-- [ ] `RiemannianAdam`
-- [ ] Autograd integration
-- [ ] Benchmarks vs PyTorch
+
+Phase 2 focuses on implementing production-ready Riemannian optimizers with full PyTorch autograd integration, comprehensive testing, and performance benchmarking against standard PyTorch optimizers.
+
+#### 2.1 Overview and Objectives
+
+**Primary Objectives:**
+- Implement `RiemannianSGD` and `RiemannianAdam` optimizers that seamlessly integrate with PyTorch's autograd system
+- Enable geodesic parameter updates on manifold-constrained parameters while maintaining compatibility with standard Euclidean parameters
+- Achieve performance overhead of <50% compared to PyTorch's native optimizers for typical deep learning workloads
+- Provide comprehensive testing and benchmarking infrastructure
+
+**Scope:**
+- Core optimizer implementations with manifold-aware gradient handling
+- Automatic detection and appropriate handling of both `ManifoldParameter` and standard `nn.Parameter` instances
+- Full integration with `torch.autograd` for gradient computation and projection
+- Momentum-based optimization with parallel transport for geometric consistency
+- Support for common optimizer features: weight decay, gradient clipping, learning rate scheduling
+- Benchmarking suite comparing against `torch.optim.SGD` and `torch.optim.Adam`
+
+**Out of Scope (for Phase 2):**
+- Second-order optimizers (L-BFGS, natural gradient descent) - deferred to Phase 6
+- Distributed/multi-GPU optimization - deferred to Phase 6
+- Automatic mixed precision (AMP) integration - basic support only, full integration in Phase 6
+- Custom CUDA kernels for optimization - deferred to Phase 6
+- Learning rate finder utilities - deferred to Phase 3
+
+**Key Milestones:**
+1. RiemannianSGD implementation with momentum and weight decay
+2. RiemannianAdam implementation with bias correction and parallel transport
+3. Autograd integration with gradient projection hooks
+4. Comprehensive test suite covering optimizer correctness and convergence
+5. Benchmark suite with performance comparisons and overhead analysis
+6. Documentation and usage examples
+
+**Success Criteria:**
+- All optimizer property tests pass (momentum preservation, convergence guarantees)
+- Convergence tests show distance reduction >99% on synthetic manifold tasks
+- Performance overhead <50% vs PyTorch optimizers (measured on representative tasks)
+- 100% backward compatibility with existing PyTorch optimizer usage patterns
+- Comprehensive documentation with examples for each optimizer
+
+#### 2.2 RiemannianSGD Specification
+
+**API Signature:**
+
+```python
+class RiemannianSGD(torch.optim.Optimizer):
+    """
+    Riemannian Stochastic Gradient Descent with momentum and geodesic updates.
+    
+    Performs optimization on Riemannian manifolds using the exponential map
+    for parameter updates. For standard Euclidean parameters, falls back to
+    standard SGD behavior.
+    
+    Args:
+        params (iterable): Iterable of parameters to optimize or dicts defining
+            parameter groups.
+        lr (float): Learning rate (required).
+        momentum (float, optional): Momentum factor (default: 0). When non-zero,
+            uses parallel transport to move momentum vectors between tangent spaces.
+        dampening (float, optional): Dampening for momentum (default: 0).
+        weight_decay (float, optional): Weight decay (L2 penalty) (default: 0).
+            Applied in tangent space before exponential map update.
+        nesterov (bool, optional): Enables Nesterov momentum (default: False).
+        grad_clip (float, optional): Maximum norm for gradient clipping in
+            tangent space (default: None). If specified, gradients are clipped
+            before update.
+        stabilize (bool, optional): Apply periodic manifold projection to
+            counteract numerical drift (default: True).
+    
+    Example:
+        >>> manifold = Sphere(64)
+        >>> param = ManifoldParameter(manifold.random_point(), manifold)
+        >>> optimizer = RiemannianSGD([param], lr=0.01, momentum=0.9)
+        >>> 
+        >>> optimizer.zero_grad()
+        >>> loss = compute_loss(param)
+        >>> loss.backward()
+        >>> optimizer.step()
+    
+    Notes:
+        - For ManifoldParameter instances, gradients are automatically projected
+          to tangent space and updates use the manifold's exponential map.
+        - For standard nn.Parameter instances, behaves identically to torch.optim.SGD.
+        - Momentum vectors are parallel transported when moving to new points on
+          the manifold, preserving their geometric meaning.
+    """
+    
+    def __init__(
+        self,
+        params,
+        lr: float,
+        momentum: float = 0,
+        dampening: float = 0,
+        weight_decay: float = 0,
+        nesterov: bool = False,
+        grad_clip: Optional[float] = None,
+        stabilize: bool = True
+    ):
+        ...
+```
+
+**Supported Arguments:**
+
+1. **Learning Rate (`lr`)**: 
+   - Required positive float
+   - Controls step size along geodesic
+   - Geodesic distance traveled = lr * ||gradient||
+   - Typical range: [0.001, 0.1] for manifold parameters
+
+2. **Momentum (`momentum`)**:
+   - Float in [0, 1), default 0
+   - When > 0, maintains velocity vector in tangent space
+   - Velocity is **parallel transported** to new tangent space after each step
+   - Preserves velocity magnitude and direction geometrically
+   - Formula: `v_{t+1} = PT(momentum * v_t, p_t, p_{t+1}) + (1 - dampening) * grad_t`
+
+3. **Weight Decay (`weight_decay`)**:
+   - Non-negative float, default 0
+   - Riemannian regularization: adds `-weight_decay * param` to gradient in tangent space
+   - For sphere: pulls parameters toward origin (shrinks radius component)
+   - For Euclidean: equivalent to L2 regularization
+   - Applied before exponential map: `grad = grad + weight_decay * param`
+
+4. **Gradient Clipping (`grad_clip`)**:
+   - Optional positive float
+   - Clips gradient norm in tangent space before update
+   - `if ||grad|| > grad_clip: grad = grad * (grad_clip / ||grad||)`
+   - Prevents excessive geodesic steps
+   - Useful for training stability on curved manifolds
+
+5. **Dampening (`dampening`)**:
+   - Float in [0, 1], default 0
+   - Reduces contribution of current gradient to momentum
+   - Used only when `momentum > 0`
+
+6. **Nesterov (`nesterov`)**:
+   - Boolean, default False
+   - Enables Nesterov accelerated gradient
+   - Requires `momentum > 0` and `dampening = 0`
+
+7. **Stabilize (`stabilize`)**:
+   - Boolean, default True
+   - Periodically projects parameters back onto manifold (every 10 steps)
+   - Counteracts numerical drift from exp map approximations
+
+**Tangent Projection:**
+
+For each `ManifoldParameter`, the gradient is projected to the tangent space:
+
+```python
+def project_gradient(param: ManifoldParameter):
+    """Project gradient to tangent space at current parameter point."""
+    if param.grad is None:
+        return
+    
+    # Get manifold
+    manifold = param.manifold
+    
+    # Project gradient to tangent space
+    param.grad.data = manifold.project_tangent(param.data, param.grad.data)
+```
+
+**Exponential Map Updates:**
+
+Parameter updates use the manifold's exponential map:
+
+```python
+def step_on_manifold(param: ManifoldParameter, grad: Tensor, lr: float):
+    """Update parameter via geodesic flow."""
+    manifold = param.manifold
+    
+    # Compute update direction (negative gradient)
+    direction = -lr * grad
+    
+    # Move along geodesic
+    param.data = manifold.exp(param.data, direction)
+    
+    # Optional: project back to manifold to fix numerical errors
+    if self.stabilize and self.step_count % 10 == 0:
+        param.data = manifold.project(param.data)
+```
+
+**Step Logic:**
+
+```python
+def step(self, closure=None):
+    """Performs a single optimization step."""
+    loss = None
+    if closure is not None:
+        with torch.enable_grad():
+            loss = closure()
+    
+    for group in self.param_groups:
+        weight_decay = group['weight_decay']
+        momentum = group['momentum']
+        dampening = group['dampening']
+        nesterov = group['nesterov']
+        grad_clip = group.get('grad_clip', None)
+        lr = group['lr']
+        
+        for param in group['params']:
+            if param.grad is None:
+                continue
+            
+            grad = param.grad.data
+            state = self.state[param]
+            
+            # Check if manifold parameter
+            is_manifold = isinstance(param, ManifoldParameter)
+            
+            if is_manifold:
+                # Project gradient to tangent space
+                manifold = param.manifold
+                grad = manifold.project_tangent(param.data, grad)
+            
+            # Apply weight decay in tangent space
+            if weight_decay != 0:
+                grad = grad.add(param.data, alpha=weight_decay)
+            
+            # Gradient clipping
+            if grad_clip is not None:
+                grad_norm = grad.norm()
+                if grad_norm > grad_clip:
+                    grad = grad * (grad_clip / grad_norm)
+            
+            # Momentum
+            if momentum != 0:
+                if 'momentum_buffer' not in state:
+                    buf = state['momentum_buffer'] = torch.zeros_like(grad)
+                else:
+                    buf = state['momentum_buffer']
+                    
+                    # Parallel transport momentum if on manifold
+                    if is_manifold and 'prev_point' in state:
+                        prev_point = state['prev_point']
+                        buf = manifold.parallel_transport(buf, prev_point, param.data)
+                
+                buf.mul_(momentum).add_(grad, alpha=1 - dampening)
+                
+                if nesterov:
+                    grad = grad.add(buf, alpha=momentum)
+                else:
+                    grad = buf
+            
+            # Store current point for next momentum transport
+            if is_manifold and momentum != 0:
+                state['prev_point'] = param.data.clone()
+            
+            # Update parameter
+            if is_manifold:
+                # Geodesic update via exponential map
+                param.data = manifold.exp(param.data, -lr * grad)
+                
+                # Periodic stabilization
+                if self.stabilize and self._step_count % 10 == 0:
+                    param.data = manifold.project(param.data)
+            else:
+                # Standard Euclidean update
+                param.data.add_(grad, alpha=-lr)
+    
+    self._step_count += 1
+    return loss
+```
+
+**Expected Invariants:**
+
+1. **Manifold Constraint Preservation**: After each step, `param ∈ M` (parameter remains on manifold)
+   - Test: `assert manifold.check_point(param.data)`
+   
+2. **Tangent Space Gradients**: Gradients are always in tangent space
+   - Test: `assert manifold.check_tangent(param.data, param.grad.data)`
+   
+3. **Momentum Norm Preservation**: Parallel transport preserves momentum magnitude
+   - Test: `assert torch.isclose(||v_transported||, ||v_original||, rtol=1e-4)`
+   
+4. **Convergence**: Distance to target decreases monotonically (for convex problems)
+   - Test: `assert distance_t < distance_{t-1}` or `loss_t < loss_{t-1}`
+   
+5. **Euclidean Compatibility**: For Euclidean manifold, behaves identically to `torch.optim.SGD`
+   - Test: Compare outputs on same random seed
+
+#### 2.3 RiemannianAdam Specification
+
+**API Signature:**
+
+```python
+class RiemannianAdam(torch.optim.Optimizer):
+    """
+    Riemannian Adam optimizer with adaptive learning rates and parallel transport.
+    
+    Implements Adam optimization on Riemannian manifolds by maintaining first and
+    second moment estimates in tangent spaces and using parallel transport to move
+    these estimates between tangent spaces as parameters evolve.
+    
+    Args:
+        params (iterable): Iterable of parameters to optimize or dicts defining
+            parameter groups.
+        lr (float, optional): Learning rate (default: 1e-3).
+        betas (Tuple[float, float], optional): Coefficients for computing running
+            averages of gradient and its square (default: (0.9, 0.999)).
+        eps (float, optional): Term added to denominator for numerical stability
+            (default: 1e-8).
+        weight_decay (float, optional): Weight decay coefficient (default: 0).
+            Applied as Riemannian regularization in tangent space.
+        amsgrad (bool, optional): Whether to use AMSGrad variant (default: False).
+        stabilize (bool, optional): Apply periodic manifold projection (default: True).
+    
+    Example:
+        >>> manifold = Sphere(64)
+        >>> param = ManifoldParameter(manifold.random_point(), manifold)
+        >>> optimizer = RiemannianAdam([param], lr=1e-3, betas=(0.9, 0.999))
+        >>> 
+        >>> for epoch in range(num_epochs):
+        >>>     optimizer.zero_grad()
+        >>>     loss = model(data)
+        >>>     loss.backward()
+        >>>     optimizer.step()
+    
+    Notes:
+        - First and second moment estimates (m_t, v_t) are stored in tangent space
+        - Moments are parallel transported to new tangent space after each update
+        - Bias correction is applied as in standard Adam
+        - For standard parameters, behaves identically to torch.optim.Adam
+    """
+    
+    def __init__(
+        self,
+        params,
+        lr: float = 1e-3,
+        betas: Tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0,
+        amsgrad: bool = False,
+        stabilize: bool = True
+    ):
+        ...
+```
+
+**Moment Updates:**
+
+Adam maintains two moment estimates per parameter:
+- **First moment** (m): Exponential moving average of gradients
+- **Second moment** (v): Exponential moving average of squared gradients
+
+```python
+# Initialize moments (in tangent space at initial point)
+state['exp_avg'] = torch.zeros_like(grad)  # First moment (m)
+state['exp_avg_sq'] = torch.zeros_like(grad)  # Second moment (v)
+state['step'] = 0
+
+# Update moments
+beta1, beta2 = group['betas']
+state['exp_avg'].mul_(beta1).add_(grad, alpha=1 - beta1)
+state['exp_avg_sq'].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+```
+
+**Parallel Transport of Moments:**
+
+When parameter moves from `p_old` to `p_new`, moment vectors must be transported:
+
+```python
+def transport_moments(state, manifold, p_old, p_new):
+    """Transport moment estimates to new tangent space."""
+    if 'prev_point' in state:
+        # Transport first moment
+        state['exp_avg'] = manifold.parallel_transport(
+            state['exp_avg'], 
+            state['prev_point'], 
+            p_new
+        )
+        
+        # Transport second moment
+        state['exp_avg_sq'] = manifold.parallel_transport(
+            state['exp_avg_sq'],
+            state['prev_point'],
+            p_new
+        )
+    
+    # Store current point for next transport
+    state['prev_point'] = p_new.clone()
+```
+
+**Bias Correction:**
+
+Apply bias correction as in standard Adam:
+
+```python
+bias_correction1 = 1 - beta1 ** state['step']
+bias_correction2 = 1 - beta2 ** state['step']
+
+# Bias-corrected moments
+m_hat = state['exp_avg'] / bias_correction1
+v_hat = state['exp_avg_sq'] / bias_correction2
+```
+
+**Weight Decay:**
+
+Two modes supported:
+1. **AdamW-style** (decoupled): `param = param - lr * weight_decay * param`
+2. **L2-style** (coupled): Add to gradient before moment update
+
+```python
+if weight_decay != 0:
+    # AdamW-style weight decay in tangent space
+    grad = grad.add(param.data, alpha=weight_decay)
+```
+
+**Epsilon Handling:**
+
+Added to denominator for numerical stability:
+
+```python
+# Adaptive learning rate
+step_size = lr / (torch.sqrt(v_hat) + eps)
+
+# Update direction
+direction = -step_size * m_hat
+```
+
+**Step Logic:**
+
+```python
+def step(self, closure=None):
+    """Performs a single optimization step."""
+    loss = None
+    if closure is not None:
+        with torch.enable_grad():
+            loss = closure()
+    
+    for group in self.param_groups:
+        beta1, beta2 = group['betas']
+        lr = group['lr']
+        eps = group['eps']
+        weight_decay = group['weight_decay']
+        amsgrad = group['amsgrad']
+        
+        for param in group['params']:
+            if param.grad is None:
+                continue
+            
+            grad = param.grad.data
+            is_manifold = isinstance(param, ManifoldParameter)
+            
+            if is_manifold:
+                manifold = param.manifold
+                grad = manifold.project_tangent(param.data, grad)
+            
+            # Apply weight decay
+            if weight_decay != 0:
+                grad = grad.add(param.data, alpha=weight_decay)
+            
+            # State initialization
+            state = self.state[param]
+            if len(state) == 0:
+                state['step'] = 0
+                state['exp_avg'] = torch.zeros_like(grad)
+                state['exp_avg_sq'] = torch.zeros_like(grad)
+                if amsgrad:
+                    state['max_exp_avg_sq'] = torch.zeros_like(grad)
+            else:
+                # Parallel transport moments if on manifold
+                if is_manifold and 'prev_point' in state:
+                    prev = state['prev_point']
+                    state['exp_avg'] = manifold.parallel_transport(
+                        state['exp_avg'], prev, param.data
+                    )
+                    state['exp_avg_sq'] = manifold.parallel_transport(
+                        state['exp_avg_sq'], prev, param.data
+                    )
+                    if amsgrad:
+                        state['max_exp_avg_sq'] = manifold.parallel_transport(
+                            state['max_exp_avg_sq'], prev, param.data
+                        )
+            
+            exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+            state['step'] += 1
+            
+            # Update biased moments
+            exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+            
+            if amsgrad:
+                max_exp_avg_sq = state['max_exp_avg_sq']
+                torch.maximum(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                denom = max_exp_avg_sq.sqrt().add_(eps)
+            else:
+                denom = exp_avg_sq.sqrt().add_(eps)
+            
+            # Bias correction
+            bias_correction1 = 1 - beta1 ** state['step']
+            bias_correction2 = 1 - beta2 ** state['step']
+            step_size = lr * math.sqrt(bias_correction2) / bias_correction1
+            
+            # Compute update direction
+            direction = -step_size * (exp_avg / denom)
+            
+            # Store current point for next transport
+            if is_manifold:
+                state['prev_point'] = param.data.clone()
+            
+            # Apply update
+            if is_manifold:
+                param.data = manifold.exp(param.data, direction)
+                if self.stabilize and state['step'] % 10 == 0:
+                    param.data = manifold.project(param.data)
+            else:
+                param.data.add_(direction)
+    
+    return loss
+```
+
+**Expected Invariants:**
+
+1. **Manifold Constraint**: `param ∈ M` after every step
+2. **Tangent Space Moments**: `m_t, v_t ∈ T_p M` at current point p
+3. **Moment Transport Preserves Norm**: `||PT(m)|| ≈ ||m||` (within numerical tolerance)
+4. **Positive Definiteness**: Second moment `v_t > 0` (element-wise)
+5. **Bias Correction Bounds**: Corrected moments approach true moments as steps increase
+6. **Convergence**: For convex problems, loss decreases on average
+
+#### 2.4 Shared Optimizer Behaviors
+
+**Manifold-Parameter Detection:**
+
+Optimizers automatically detect parameter type:
+
+```python
+def is_manifold_param(param):
+    """Check if parameter is constrained to a manifold."""
+    return isinstance(param, ManifoldParameter) and hasattr(param, 'manifold')
+
+def get_manifold(param):
+    """Get manifold associated with parameter, or Euclidean if standard."""
+    if is_manifold_param(param):
+        return param.manifold
+    else:
+        return Euclidean(param.numel())  # Treat as flat space
+```
+
+**Mixed Precision Expectations:**
+
+- **FP16/BF16 Training**: Optimizers should work with `torch.cuda.amp.autocast()`
+- Gradient scaling is applied before manifold projection
+- Exp map and parallel transport computations done in FP32 for stability
+- Final parameter updates can be cast back to FP16/BF16
+
+```python
+# Mixed precision pattern
+with torch.cuda.amp.autocast():
+    loss = model(data)
+
+scaler.scale(loss).backward()
+
+# Gradients are scaled; optimizer handles unscaling
+scaler.step(optimizer)  # Includes manifold operations
+scaler.update()
+```
+
+**Device and Dtype Handling:**
+
+- All operations preserve device (CPU/CUDA) and dtype of parameters
+- Manifold operations (exp, log, parallel_transport) inherit device/dtype
+- State tensors (momentum, moments) created with same device/dtype as parameters
+
+```python
+# Ensure device/dtype consistency
+direction = -lr * grad  # Same device/dtype as grad
+param.data = manifold.exp(param.data, direction)  # Preserves device/dtype
+```
+
+**Determinism and Seeds:**
+
+- With fixed random seed, optimizer behavior is deterministic
+- Parallel transport and exp map are deterministic operations
+- No randomness in optimizer step (unlike some variance-reduced methods)
+- For reproducibility:
+
+```python
+torch.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+torch.backends.cudnn.deterministic = True
+```
+
+**Parameter Groups:**
+
+Support different hyperparameters for different parameter sets:
+
+```python
+optimizer = RiemannianAdam([
+    {'params': model.manifold_params, 'lr': 1e-3},
+    {'params': model.euclidean_params, 'lr': 1e-2, 'weight_decay': 1e-4}
+])
+```
+
+**Learning Rate Scheduling:**
+
+Compatible with PyTorch LR schedulers:
+
+```python
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+
+for epoch in range(num_epochs):
+    train(model, optimizer)
+    scheduler.step()
+```
+
+#### 2.5 Autograd Integration
+
+**Gradient Projection to Tangent Space:**
+
+Manifold parameters automatically project gradients during backward pass:
+
+```python
+class ManifoldParameter(nn.Parameter):
+    """Parameter constrained to a manifold."""
+    
+    def __new__(cls, data, manifold, requires_grad=True):
+        instance = super().__new__(cls, data, requires_grad=requires_grad)
+        instance.manifold = manifold
+        
+        # Register hook to project gradients
+        if requires_grad:
+            instance.register_hook(cls._grad_projection_hook)
+        
+        return instance
+    
+    @staticmethod
+    def _grad_projection_hook(grad):
+        """Project gradient to tangent space (called by autograd)."""
+        # This hook is called during backward()
+        # self is not available in static hook, so manifold must be stored separately
+        # Actual implementation uses a closure to capture manifold
+        pass  # Implementation details in actual code
+```
+
+**Interaction with torch.autograd:**
+
+1. **Forward Pass**: ManifoldParameters behave like normal tensors
+   ```python
+   output = model(input)  # No special handling needed
+   ```
+
+2. **Backward Pass**: Gradients computed in ambient space, then projected
+   ```python
+   loss.backward()
+   # After backward():
+   # - param.grad contains ambient gradient ∇L
+   # - Hook projects to tangent space: param.grad ← proj_TM(∇L)
+   ```
+
+3. **Optimizer Step**: Works with projected gradients
+   ```python
+   optimizer.step()
+   # Uses param.grad (already in tangent space)
+   # Applies exp map for manifold parameters
+   ```
+
+**Interaction with torch.nn.Parameter:**
+
+ManifoldParameter is a subclass of nn.Parameter:
+
+```python
+class ManifoldParameter(nn.Parameter):
+    """
+    Extends torch.nn.Parameter with manifold constraint.
+    
+    - Fully compatible with nn.Module parameter registration
+    - Appears in model.parameters() iterator
+    - Saved/loaded with model state_dict
+    - Supports all Parameter features (requires_grad, grad, data, etc.)
+    """
+```
+
+Usage in modules:
+
+```python
+class MyModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        manifold = Sphere(64)
+        
+        # Register as module parameter
+        self.weight = ManifoldParameter(
+            manifold.random_point(),
+            manifold=manifold
+        )
+        
+        # Standard parameter
+        self.bias = nn.Parameter(torch.zeros(64))
+    
+    def forward(self, x):
+        # Both parameters available
+        return x @ self.weight + self.bias
+```
+
+**Expected Hooks/Callbacks:**
+
+1. **Gradient Projection Hook**:
+   - **When**: During `loss.backward()`
+   - **What**: Projects ambient gradient to tangent space
+   - **API**: `param.register_hook(lambda grad: manifold.project_tangent(param, grad))`
+
+2. **Pre-step Hook** (optional):
+   - **When**: Before optimizer.step()
+   - **What**: Can modify gradients or check constraints
+   - **API**: Custom hook via `optimizer.register_step_pre_hook()`
+
+3. **Post-step Hook** (optional):
+   - **When**: After optimizer.step()
+   - **What**: Can verify manifold constraints or log metrics
+   - **API**: Custom hook via `optimizer.register_step_post_hook()`
+
+Example with hooks:
+
+```python
+# Gradient projection (automatic)
+def project_grad(grad):
+    return manifold.project_tangent(param.data, grad)
+
+param.register_hook(project_grad)
+
+# Post-step validation (optional)
+def check_manifold_constraint(optimizer, *args):
+    for group in optimizer.param_groups:
+        for p in group['params']:
+            if isinstance(p, ManifoldParameter):
+                assert p.manifold.check_point(p.data), "Point left manifold!"
+
+optimizer.register_step_post_hook(check_manifold_constraint)
+```
+
+**Failure Modes and Handling:**
+
+1. **Gradient Explosion on Curved Manifolds**:
+   - **Symptom**: Loss becomes NaN after few steps
+   - **Cause**: Large learning rate causes geodesic to wrap around manifold
+   - **Fix**: Reduce learning rate or use gradient clipping
+   ```python
+   optimizer = RiemannianSGD(params, lr=0.01, grad_clip=1.0)
+   ```
+
+2. **Numerical Drift from Manifold**:
+   - **Symptom**: `manifold.check_point(param)` fails after many steps
+   - **Cause**: Accumulated floating-point errors in exp map
+   - **Fix**: Enable stabilization (periodic projection)
+   ```python
+   optimizer = RiemannianAdam(params, lr=1e-3, stabilize=True)
+   ```
+
+3. **Incompatible Manifold Dimensions**:
+   - **Symptom**: Shape mismatch error during gradient projection
+   - **Cause**: Parameter reshaped but manifold not updated
+   - **Fix**: Ensure manifold dimension matches parameter size
+   ```python
+   # Wrong: manifold dim doesn't match param
+   param = ManifoldParameter(torch.randn(64, 32), Sphere(64))  # Error!
+   
+   # Correct: match dimensions
+   param = ManifoldParameter(torch.randn(64), Sphere(64))  # OK
+   ```
+
+4. **Mixed Manifold/Euclidean Batch Norm**:
+   - **Symptom**: Batch norm statistics incorrect for manifold parameters
+   - **Cause**: Manifold parameters have different scale than Euclidean
+   - **Fix**: Use manifold-aware normalization or skip norm for manifold params
+   ```python
+   # Option 1: Manifold-aware norm (future work)
+   # Option 2: Don't apply batch norm to manifold parameters
+   ```
+
+5. **Gradient Vanishing in Flat Regions**:
+   - **Symptom**: Optimization stalls despite high loss
+   - **Cause**: Tangent projection removes most of gradient in flat regions
+   - **Fix**: Use adaptive optimizer (RiemannianAdam) or adjust manifold
+   ```python
+   # Adam adapts to local geometry better than SGD
+   optimizer = RiemannianAdam(params, lr=1e-3)
+   ```
+
+#### 2.6 Benchmarks vs PyTorch
+
+**Benchmark Plan:**
+
+Comprehensive performance evaluation comparing GeoTorch Riemannian optimizers against PyTorch baseline optimizers on representative deep learning tasks.
+
+**Metrics:**
+
+1. **Throughput**:
+   - Samples/second during training
+   - Measured over 100 iterations after warmup
+   - Reported as mean ± std across 5 runs
+
+2. **Latency**:
+   - Time per optimizer step (ms)
+   - Breakdown: gradient computation, projection, exp map, total
+   - P50, P95, P99 percentiles
+
+3. **Step Time Overhead**:
+   - Additional time vs PyTorch baseline
+   - `overhead = (geotorch_time - pytorch_time) / pytorch_time * 100%`
+   - **Target**: <50% overhead for typical workloads
+
+4. **Memory Overhead**:
+   - Additional memory for optimizer state (momentum, moments)
+   - Peak memory usage during training
+   - **Target**: <20% increase
+
+5. **Convergence Speed**:
+   - Steps to reach target loss/accuracy
+   - Wall-clock time to convergence
+   - Final validation performance
+
+6. **Numerical Stability**:
+   - Frequency of NaN/Inf in parameters or gradients
+   - Manifold constraint violation rate
+   - Gradient norm statistics over training
+
+**Datasets and Synthetic Setups:**
+
+1. **Synthetic Manifold Optimization**:
+   - Task: Minimize distance to target point on sphere
+   - Manifold: Sphere(128, 256, 512, 1024)
+   - Batch size: N/A (single parameter)
+   - Metric: Final distance (should be <1e-6)
+   
+2. **MNIST Classification**:
+   - Task: Image classification (10 classes)
+   - Model: MLP with manifold embeddings
+   - Manifold parameters: Embedding layer (10k embeddings, dim=128) on Sphere
+   - Euclidean parameters: Hidden layers, classifier
+   - Batch size: 128
+   - Metric: Test accuracy, training time
+
+3. **Text Classification (AG News)**:
+   - Task: News category classification (4 classes)
+   - Model: Transformer encoder with geometric embeddings
+   - Manifold parameters: Token embeddings on Sphere(256)
+   - Euclidean parameters: Attention, FFN layers
+   - Batch size: 32
+   - Sequence length: 128
+   - Metric: Validation F1, throughput (samples/sec)
+
+4. **Synthetic Large-Scale**:
+   - Task: Regression with large manifold parameter tensor
+   - Manifold: Stiefel(512, 256) for parameter matrix
+   - Batch size: 64
+   - Metric: Step time, memory usage
+
+**Batch Sizes:**
+
+- Small: 16-32 (memory-constrained, latency-sensitive)
+- Medium: 64-128 (typical training)
+- Large: 256-512 (high-throughput training)
+
+**Sequence Lengths** (for NLP tasks):
+
+- Short: 32-64 tokens
+- Medium: 128-256 tokens
+- Long: 512-1024 tokens
+
+**Reporting Format:**
+
+Results presented in tables with the following structure:
+
+| Optimizer | Task | Metric | Value | vs Baseline | Notes |
+|-----------|------|--------|-------|-------------|-------|
+| RiemannianSGD | Sphere Distance | Final Distance | 3.2e-7 | N/A | Target reached |
+| torch.optim.SGD | MNIST | Test Acc | 97.8% | baseline | - |
+| RiemannianSGD | MNIST | Test Acc | 98.1% | +0.3% | Manifold embeddings |
+| torch.optim.SGD | MNIST | Step Time | 12.3 ms | baseline | - |
+| RiemannianSGD | MNIST | Step Time | 16.8 ms | +36.6% | Within target |
+
+Additional visualizations:
+- Training curves (loss over time)
+- Overhead breakdown (pie chart: grad, projection, exp map, other)
+- Scaling plots (overhead vs parameter count, batch size)
+
+**Comparisons Against PyTorch Baselines:**
+
+1. **RiemannianSGD vs torch.optim.SGD**:
+   - Same learning rate schedule
+   - Same momentum (0.9)
+   - Same weight decay (if applicable)
+   - Measure: Step time, convergence speed, final performance
+   - Expected: 20-40% overhead, similar or better convergence
+
+2. **RiemannianAdam vs torch.optim.Adam**:
+   - Same lr, betas, eps
+   - Same weight decay
+   - Measure: Step time, memory usage, convergence
+   - Expected: 30-50% overhead due to parallel transport, faster convergence on curved manifolds
+
+3. **Mixed Parameters** (both manifold and Euclidean):
+   - Model with some ManifoldParameters and some standard Parameters
+   - RiemannianAdam should handle both seamlessly
+   - Overhead only for manifold parameters
+   - Measure: End-to-end training time vs pure PyTorch
+
+**Benchmark Code Structure:**
+
+```python
+# benchmarks/optimizer_step.py
+def benchmark_optimizer_step(optimizer_cls, manifold, n_params, n_steps=100):
+    """Benchmark optimizer step time."""
+    params = [ManifoldParameter(manifold.random_point(), manifold) 
+              for _ in range(n_params)]
+    optimizer = optimizer_cls(params, lr=0.01)
+    
+    # Warmup
+    for _ in range(10):
+        optimizer.zero_grad()
+        loss = sum((p ** 2).sum() for p in params)
+        loss.backward()
+        optimizer.step()
+    
+    # Benchmark
+    start = time.perf_counter()
+    for _ in range(n_steps):
+        optimizer.zero_grad()
+        loss = sum((p ** 2).sum() for p in params)
+        loss.backward()
+        optimizer.step()
+    end = time.perf_counter()
+    
+    step_time = (end - start) / n_steps * 1000  # ms
+    return step_time
+```
+
+#### 2.7 Testing Plan
+
+**Unit Tests for Optimizers:**
+
+1. **Basic Functionality**:
+   ```python
+   def test_optimizer_step_reduces_loss():
+       """Single step should reduce loss for simple convex problem."""
+       
+   def test_optimizer_handles_none_gradients():
+       """Optimizer should skip parameters with None gradients."""
+       
+   def test_optimizer_parameter_groups():
+       """Different parameter groups should have different hyperparameters."""
+   ```
+
+2. **Hyperparameter Validation**:
+   ```python
+   def test_invalid_learning_rate_raises():
+       """Negative or zero LR should raise ValueError."""
+       
+   def test_invalid_betas_raises():
+       """Betas outside [0,1) should raise ValueError."""
+   ```
+
+**Property Tests for Manifold Invariants:**
+
+1. **Constraint Preservation**:
+   ```python
+   @given(manifold=st.sampled_from([Sphere(64), Stiefel(64, 32)]),
+          lr=st.floats(min_value=1e-4, max_value=0.1))
+   def test_param_stays_on_manifold(manifold, lr):
+       """Parameter remains on manifold after optimization step."""
+       param = ManifoldParameter(manifold.random_point(), manifold)
+       optimizer = RiemannianSGD([param], lr=lr)
+       
+       for _ in range(10):
+           optimizer.zero_grad()
+           loss = (param ** 2).sum()
+           loss.backward()
+           optimizer.step()
+           
+           assert manifold.check_point(param.data), "Left manifold!"
+   ```
+
+2. **Momentum Parallel Transport**:
+   ```python
+   def test_momentum_preserves_norm():
+       """Parallel transport preserves momentum vector norm."""
+       manifold = Sphere(64)
+       param = ManifoldParameter(manifold.random_point(), manifold)
+       optimizer = RiemannianSGD([param], lr=0.01, momentum=0.9)
+       
+       optimizer.zero_grad()
+       loss = (param ** 2).sum()
+       loss.backward()
+       optimizer.step()
+       
+       # Get momentum from state
+       state = optimizer.state[param]
+       momentum_before = state['momentum_buffer'].clone()
+       prev_point = state['prev_point'].clone()
+       
+       # Another step
+       optimizer.zero_grad()
+       loss = (param ** 2).sum()
+       loss.backward()
+       optimizer.step()
+       
+       # Momentum should be transported
+       # Check norm preservation
+       transported = manifold.parallel_transport(momentum_before, prev_point, param.data)
+       actual_momentum = state['momentum_buffer']
+       
+       # Norms should match (within tolerance)
+       norm_before = momentum_before.norm()
+       norm_transported = transported.norm()
+       assert torch.isclose(norm_before, norm_transported, rtol=1e-4)
+   ```
+
+3. **Adam Moment Updates**:
+   ```python
+   def test_adam_bias_correction():
+       """Bias correction should approach 1 as steps increase."""
+       param = ManifoldParameter(torch.randn(64), Sphere(64))
+       optimizer = RiemannianAdam([param], lr=1e-3)
+       
+       for step in range(1, 101):
+           optimizer.zero_grad()
+           loss = (param ** 2).sum()
+           loss.backward()
+           optimizer.step()
+           
+           state = optimizer.state[param]
+           beta1, beta2 = 0.9, 0.999
+           
+           correction1 = 1 - beta1 ** step
+           correction2 = 1 - beta2 ** step
+           
+           # Corrections should increase toward 1
+           if step > 1:
+               assert correction1 > 1 - beta1 ** (step - 1)
+               assert correction2 > 1 - beta2 ** (step - 1)
+   ```
+
+**Convergence Tests:**
+
+1. **Distance Reduction**:
+   ```python
+   def test_convergence_to_target_sphere():
+       """Optimizer should minimize distance to target on sphere."""
+       manifold = Sphere(128)
+       param = ManifoldParameter(manifold.random_point(), manifold)
+       target = manifold.random_point()
+       
+       initial_distance = manifold.distance(param.data, target).item()
+       
+       optimizer = RiemannianAdam([param], lr=0.1)
+       
+       for _ in range(200):
+           optimizer.zero_grad()
+           loss = manifold.distance(param.data, target) ** 2
+           loss.backward()
+           optimizer.step()
+       
+       final_distance = manifold.distance(param.data, target).item()
+       
+       # Should reduce distance by >99%
+       assert final_distance < initial_distance * 0.01, \
+           f"Distance reduction insufficient: {initial_distance:.4f} -> {final_distance:.4f}"
+   ```
+
+2. **Loss Monotonicity** (for convex problems):
+   ```python
+   def test_loss_decreases_monotonically():
+       """For convex quadratic, loss should decrease every step."""
+       param = ManifoldParameter(torch.randn(64), Sphere(64))
+       target = torch.randn(64)
+       target = target / target.norm()  # On sphere
+       
+       optimizer = RiemannianSGD([param], lr=0.05)
+       
+       losses = []
+       for _ in range(50):
+           optimizer.zero_grad()
+           loss = ((param - target) ** 2).sum()
+           loss.backward()
+           optimizer.step()
+           losses.append(loss.item())
+       
+       # Check monotonic decrease (allow small violations due to numerics)
+       violations = sum(1 for i in range(1, len(losses)) if losses[i] > losses[i-1])
+       assert violations < len(losses) * 0.1, "Too many non-decreasing steps"
+   ```
+
+**Regression Tests:**
+
+1. **Backward Compatibility**:
+   ```python
+   def test_optimizer_api_compatibility():
+       """Optimizer API matches torch.optim interface."""
+       param = nn.Parameter(torch.randn(64))
+       
+       # Should work with standard parameters
+       optimizer = RiemannianAdam([param], lr=1e-3)
+       
+       # Standard API
+       optimizer.zero_grad()
+       loss = (param ** 2).sum()
+       loss.backward()
+       optimizer.step()
+       
+       # LR scheduler compatibility
+       scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10)
+       scheduler.step()
+   ```
+
+2. **Numerical Consistency**:
+   ```python
+   def test_reproducibility_with_seed():
+       """Same seed should give identical optimization trajectory."""
+       def run_optimization(seed):
+           torch.manual_seed(seed)
+           manifold = Sphere(64)
+           param = ManifoldParameter(manifold.random_point(), manifold)
+           optimizer = RiemannianAdam([param], lr=1e-3)
+           
+           for _ in range(10):
+               optimizer.zero_grad()
+               loss = (param ** 2).sum()
+               loss.backward()
+               optimizer.step()
+           
+           return param.data.clone()
+       
+       result1 = run_optimization(42)
+       result2 = run_optimization(42)
+       
+       assert torch.allclose(result1, result2, atol=1e-7), \
+           "Results should be identical with same seed"
+   ```
+
+**Autograd Correctness Tests:**
+
+1. **Gradient Projection**:
+   ```python
+   def test_gradient_projected_to_tangent_space():
+       """After backward(), gradient should be in tangent space."""
+       manifold = Sphere(64)
+       param = ManifoldParameter(manifold.random_point(), manifold, requires_grad=True)
+       
+       loss = (param ** 2).sum()
+       loss.backward()
+       
+       # Gradient should be orthogonal to point (for sphere)
+       dot_product = torch.dot(param.data, param.grad)
+       assert torch.abs(dot_product) < 1e-5, \
+           f"Gradient not in tangent space: dot={dot_product}"
+   ```
+
+2. **Gradient Flow**:
+   ```python
+   def test_gradient_flows_through_manifold_param():
+       """Gradients should flow through manifold parameters."""
+       manifold = Sphere(64)
+       param = ManifoldParameter(manifold.random_point(), manifold, requires_grad=True)
+       
+       output = param @ param  # Scalar output
+       output.backward()
+       
+       assert param.grad is not None, "Gradient should exist"
+       assert param.grad.shape == param.shape, "Gradient shape should match param"
+       assert not torch.isnan(param.grad).any(), "No NaN gradients"
+   ```
+
+3. **Second-Order Gradients** (for advanced use):
+   ```python
+   def test_second_order_gradients():
+       """Should support grad of grad for meta-learning."""
+       manifold = Sphere(64)
+       param = ManifoldParameter(manifold.random_point(), manifold, requires_grad=True)
+       
+       loss = (param ** 2).sum()
+       grad = torch.autograd.grad(loss, param, create_graph=True)[0]
+       
+       # Second-order gradient
+       grad_norm = grad.norm()
+       second_grad = torch.autograd.grad(grad_norm, param)[0]
+       
+       assert second_grad is not None, "Second-order gradients should work"
+   ```
+
+**Mixed Precision Notes:**
+
+1. **AMP Compatibility**:
+   ```python
+   @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+   def test_amp_compatibility():
+       """Optimizer should work with automatic mixed precision."""
+       manifold = Sphere(64)
+       param = ManifoldParameter(manifold.random_point(), manifold).cuda()
+       
+       optimizer = RiemannianAdam([param], lr=1e-3)
+       scaler = torch.cuda.amp.GradScaler()
+       
+       for _ in range(10):
+           optimizer.zero_grad()
+           
+           with torch.cuda.amp.autocast():
+               loss = (param ** 2).sum()
+           
+           scaler.scale(loss).backward()
+           scaler.step(optimizer)
+           scaler.update()
+       
+       # Should complete without errors
+       assert manifold.check_point(param.data)
+   ```
+
+2. **FP16 Stability**:
+   ```python
+   def test_fp16_numerical_stability():
+       """Manifold operations should remain stable in FP16."""
+       manifold = Sphere(64)
+       param_fp32 = ManifoldParameter(manifold.random_point(), manifold)
+       param_fp16 = ManifoldParameter(param_fp32.data.half(), manifold)
+       
+       # Same optimization in FP32 and FP16
+       opt_fp32 = RiemannianAdam([param_fp32], lr=1e-3)
+       opt_fp16 = RiemannianAdam([param_fp16], lr=1e-3)
+       
+       for _ in range(10):
+           for opt, param in [(opt_fp32, param_fp32), (opt_fp16, param_fp16)]:
+               opt.zero_grad()
+               loss = (param ** 2).sum()
+               loss.backward()
+               opt.step()
+       
+       # FP16 and FP32 should be close (with expected precision difference)
+       assert torch.allclose(
+           param_fp32.data, 
+           param_fp16.data.float(), 
+           atol=1e-2, 
+           rtol=1e-2
+       ), "FP16 results should approximate FP32"
+   ```
+
+**Test Coverage Targets:**
+
+- Line coverage: >90% for optimizer code
+- Branch coverage: >85% for conditional logic
+- All public APIs tested
+- All failure modes documented with regression tests
+
+**Continuous Integration:**
+
+- Run full test suite on every PR
+- Benchmark tests run nightly (performance regression detection)
+- Test on multiple Python versions (3.10, 3.11, 3.12)
+- Test on multiple PyTorch versions (2.0, 2.1, 2.2, latest)
+- Test on CPU and CUDA (if available)
 
 ### Phase 3: Neural Network Layers (v0.3)
 - [ ] `ManifoldLinear`
