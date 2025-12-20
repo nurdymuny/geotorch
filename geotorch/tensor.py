@@ -46,23 +46,51 @@ class ManifoldTensor(torch.Tensor):
     def __add__(self, other):
         """Addition with TangentTensor or other tensors."""
         if isinstance(other, (TangentTensor, ManifoldTensor)):
-            # Return underlying tensor addition (loses manifold structure)
-            return torch.Tensor.__add__(self, other)
-        return torch.Tensor.__add__(self, other)
+            # Convert both to plain tensors and add
+            return torch.as_tensor(self) + torch.as_tensor(other)
+        return torch.as_tensor(self) + other
     
     def __radd__(self, other):
-        return self.__add__(other)
+        """Reverse addition."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(other) + torch.as_tensor(self)
+        return other + torch.as_tensor(self)
     
     def __mul__(self, other):
-        """Scalar multiplication."""
-        result = torch.Tensor.__mul__(self, other)
-        # For scalar multiplication, try to preserve manifold structure
-        if isinstance(other, (int, float)):
-            return result  # But this may not be on manifold anymore
-        return result
+        """Multiplication with scalars or other tensors."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(self) * torch.as_tensor(other)
+        return torch.as_tensor(self) * other
     
     def __rmul__(self, other):
-        return self.__mul__(other)
+        """Reverse multiplication."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(other) * torch.as_tensor(self)
+        return other * torch.as_tensor(self)
+    
+    def __truediv__(self, other):
+        """Division by scalars or tensors."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(self) / torch.as_tensor(other)
+        return torch.as_tensor(self) / other
+    
+    def __rtruediv__(self, other):
+        """Reverse division."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(other) / torch.as_tensor(self)
+        return other / torch.as_tensor(self)
+    
+    def __sub__(self, other):
+        """Subtraction."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(self) - torch.as_tensor(other)
+        return torch.as_tensor(self) - other
+    
+    def __rsub__(self, other):
+        """Reverse subtraction."""
+        if isinstance(other, (TangentTensor, ManifoldTensor)):
+            return torch.as_tensor(other) - torch.as_tensor(self)
+        return other - torch.as_tensor(self)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -203,33 +231,53 @@ class TangentTensor(torch.Tensor):
                 f"manifold={self.manifold.__class__.__name__})")
     
     def __add__(self, other):
-        """Addition with ManifoldTensor or other TangentTensor."""
-        if isinstance(other, ManifoldTensor):
-            # Return underlying tensor addition (loses tangent structure)
-            return torch.Tensor.__add__(self, other)
-        elif isinstance(other, TangentTensor):
-            result = torch.Tensor.__add__(self, other)
-            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
-        return torch.Tensor.__add__(self, other)
+        """Addition with ManifoldTensor or other tensors."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            # Convert both to plain tensors and add
+            return torch.as_tensor(self) + torch.as_tensor(other)
+        return torch.as_tensor(self) + other
     
     def __radd__(self, other):
-        return self.__add__(other)
+        """Reverse addition."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(other) + torch.as_tensor(self)
+        return other + torch.as_tensor(self)
     
     def __mul__(self, other):
-        """Scalar multiplication or interaction with ManifoldTensor."""
-        if isinstance(other, (int, float)):
-            result = torch.Tensor.__mul__(self, other)
-            return TangentTensor(result, base_point=self.base_point, manifold=self.manifold)
-        elif isinstance(other, ManifoldTensor):
-            # Return underlying tensor multiplication
-            return torch.Tensor.__mul__(self, other)
-        elif isinstance(other, torch.Tensor) and not isinstance(other, (ManifoldTensor, TangentTensor)):
-            result = torch.Tensor.__mul__(self, other)
-            return result
-        return torch.Tensor.__mul__(self, other)
+        """Multiplication with scalars or other tensors."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(self) * torch.as_tensor(other)
+        return torch.as_tensor(self) * other
     
     def __rmul__(self, other):
-        return self.__mul__(other)
+        """Reverse multiplication."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(other) * torch.as_tensor(self)
+        return other * torch.as_tensor(self)
+    
+    def __truediv__(self, other):
+        """Division by scalars or tensors."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(self) / torch.as_tensor(other)
+        return torch.as_tensor(self) / other
+    
+    def __rtruediv__(self, other):
+        """Reverse division."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(other) / torch.as_tensor(self)
+        return other / torch.as_tensor(self)
+    
+    def __sub__(self, other):
+        """Subtraction."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(self) - torch.as_tensor(other)
+        return torch.as_tensor(self) - other
+    
+    def __rsub__(self, other):
+        """Reverse subtraction."""
+        if isinstance(other, (ManifoldTensor, TangentTensor)):
+            return torch.as_tensor(other) - torch.as_tensor(self)
+        return other - torch.as_tensor(self)
     
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
