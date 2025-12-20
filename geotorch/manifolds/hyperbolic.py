@@ -202,7 +202,9 @@ class Hyperbolic(Manifold):
         arcosh_arg = 1.0 + 2.0 * diff_sqnorm / denominator
         arcosh_arg = torch.clamp(arcosh_arg, min=1.0)
         
-        return torch.acosh(arcosh_arg)
+        dist = torch.acosh(arcosh_arg)
+        # Ensure non-negative (clamp small negative artifacts to zero)
+        return torch.clamp(dist, min=0.0)
     
     def project(self, x: Tensor) -> Tensor:
         """

@@ -138,11 +138,13 @@ class Sphere(Manifold):
             q: Second point on sphere
         
         Returns:
-            Geodesic distance (angle in radians)
+            Geodesic distance (angle in radians), always non-negative
         """
         dot_pq = torch.sum(p * q, dim=-1)
         dot_pq = torch.clamp(dot_pq, -1.0 + self._eps, 1.0 - self._eps)
-        return torch.acos(dot_pq)
+        dist = torch.acos(dot_pq)
+        # Ensure non-negative (clamp small negative artifacts to zero)
+        return torch.clamp(dist, min=0.0)
     
     def project(self, x: Tensor) -> Tensor:
         """Project point onto sphere by normalization.
@@ -173,7 +175,7 @@ class Sphere(Manifold):
         dot_vp = torch.sum(v * p, dim=-1, keepdim=True)
         return v - dot_vp * p
     
-    def in_domain(self, p: Tensor, q: Tensor) -> bool:
+    def in_domain(self, p: Tensor, q: Tensor) -> Tensor:
         """Check if log_p(q) is well-defined.
         
         The logarithmic map is not well-defined at antipodal points
@@ -184,11 +186,11 @@ class Sphere(Manifold):
             q: Target point
         
         Returns:
-            True if q is not antipodal to p
+            Boolean tensor, True if q is not antipodal to p
         """
         dot_pq = torch.sum(p * q, dim=-1)
         # Check if points are approximately antipodal (dot product ≈ -1)
-        return torch.all(dot_pq > -1.0 + self._eps).item()
+        return torch.all(dot_pq > -1.0 + self._eps)
     
     def random_point(self, *shape, device=None, dtype=None) -> Tensor:
         """Generate random point(s) uniformly on the sphere.
