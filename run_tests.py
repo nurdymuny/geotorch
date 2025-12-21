@@ -2,9 +2,15 @@
 """Test runner script for DavisTensor."""
 
 import sys
-import pytest
+import os
+
+# Add the repository root to the Python path
+repo_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, repo_root)
 
 if __name__ == '__main__':
+    import pytest
+    
     # Run DavisTensor tests
     args = ['tests/test_davistensor.py', '-v', '--tb=short']
     
