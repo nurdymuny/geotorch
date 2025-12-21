@@ -43,7 +43,7 @@ Repository = "https://github.com/nurdymuny/geotorch"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["geotorch*"]
+include = ["geotorch*", "davistensor*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
