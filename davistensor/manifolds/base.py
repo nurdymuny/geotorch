@@ -200,7 +200,7 @@ class Euclidean(Manifold):
         p_data = p.numpy()
         q_data = q.numpy()
         diff = q_data - p_data
-        dist = np.linalg.norm(diff)
+        dist = float(np.linalg.norm(diff))
         
         from ..core.storage import _create_tensor, GeometricType
         return _create_tensor(
@@ -298,7 +298,7 @@ class Euclidean(Manifold):
             Euclidean norm
         """
         v_data = v.numpy()
-        norm_val = np.linalg.norm(v_data)
+        norm_val = float(np.linalg.norm(v_data))
         
         from ..core.storage import _create_tensor, GeometricType
         return _create_tensor(
