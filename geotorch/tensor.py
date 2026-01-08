@@ -99,6 +99,8 @@ class ManifoldTensor(torch.Tensor):
     _METADATA_PRESERVING_OPS = {
         'clone', 'detach', 'to', 'contiguous', 'requires_grad_',
         'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16',
+        '__getitem__',  # Indexing selects valid subset of points
+        'unbind', 'chunk', 'split', 'tensor_split',  # Multi-output ops preserve structure
     }
     
     @classmethod
@@ -109,6 +111,9 @@ class ManifoldTensor(torch.Tensor):
         Structure-preserving operations (clone, detach, to, etc.) maintain
         manifold metadata. Algebraic operations (add, mul, etc.) intentionally
         drop metadata since they don't preserve manifold membership.
+        
+        Multi-output operations (e.g., unbind, split) wrap each output tensor
+        with the same manifold metadata.
         """
         if kwargs is None:
             kwargs = {}
@@ -121,10 +126,21 @@ class ManifoldTensor(torch.Tensor):
             # Find the source ManifoldTensor to get manifold from
             for arg in args:
                 if isinstance(arg, ManifoldTensor) and hasattr(arg, 'manifold'):
-                    if isinstance(ret, torch.Tensor):
-                        # Result may be ManifoldTensor without manifold attr, or plain Tensor
-                        if not hasattr(ret, 'manifold'):
-                            return ManifoldTensor(ret, manifold=arg.manifold)
+                    manifold = arg.manifold
+                    
+                    # Handle multi-output ops (tuple/list of tensors)
+                    if isinstance(ret, (tuple, list)):
+                        wrapped = [
+                            ManifoldTensor(t, manifold=manifold) 
+                            if isinstance(t, torch.Tensor) and not (isinstance(t, ManifoldTensor) and hasattr(t, 'manifold'))
+                            else t
+                            for t in ret
+                        ]
+                        return type(ret)(wrapped)
+                    
+                    # Handle single tensor output
+                    if isinstance(ret, torch.Tensor) and not (isinstance(ret, ManifoldTensor) and hasattr(ret, 'manifold')):
+                        return ManifoldTensor(ret, manifold=manifold)
                     break
         
         return ret
@@ -332,6 +348,8 @@ class TangentTensor(torch.Tensor):
     _METADATA_PRESERVING_OPS = {
         'clone', 'detach', 'to', 'contiguous', 'requires_grad_',
         'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16',
+        '__getitem__',  # Indexing selects valid subset of vectors
+        'unbind', 'chunk', 'split', 'tensor_split',  # Multi-output ops preserve structure
     }
     
     # Operations that change device/dtype and require base_point migration
@@ -345,6 +363,9 @@ class TangentTensor(torch.Tensor):
         Structure-preserving operations maintain base_point and manifold metadata.
         Device/dtype operations (to, cuda, cpu, etc.) also migrate the base_point
         to avoid device mismatches during parallel transport.
+        
+        Multi-output operations (e.g., unbind, split) wrap each output tensor
+        with the same base_point and manifold metadata.
         """
         if kwargs is None:
             kwargs = {}
@@ -356,16 +377,36 @@ class TangentTensor(torch.Tensor):
         if func_name in cls._METADATA_PRESERVING_OPS:
             for arg in args:
                 if isinstance(arg, TangentTensor) and hasattr(arg, 'manifold'):
-                    if isinstance(ret, torch.Tensor):
-                        # Result may be TangentTensor without attrs, or plain Tensor
-                        if not hasattr(ret, 'manifold'):
-                            # For device/dtype ops, also migrate base_point
-                            if func_name in cls._DEVICE_DTYPE_OPS:
-                                # Apply same operation to base_point
-                                migrated_base = func(arg.base_point, *args[1:], **kwargs)
-                            else:
-                                migrated_base = arg.base_point
-                            return TangentTensor(ret, base_point=migrated_base, manifold=arg.manifold)
+                    # For device/dtype ops, migrate base_point using method call when available
+                    if func_name in cls._DEVICE_DTYPE_OPS:
+                        base = arg.base_point
+                        if func_name == 'to':
+                            migrated_base = base.to(*args[1:], **kwargs)
+                        elif hasattr(base, func_name):
+                            # Use method call (e.g., base.cuda(), base.float())
+                            migrated_base = getattr(base, func_name)(**kwargs)
+                        else:
+                            migrated_base = func(base, *args[1:], **kwargs)
+                    elif func_name == 'detach':
+                        # Detach base_point too, to avoid keeping gradient graph alive
+                        migrated_base = arg.base_point.detach()
+                    else:
+                        migrated_base = arg.base_point
+                    manifold = arg.manifold
+                    
+                    # Handle multi-output ops (tuple/list of tensors)
+                    if isinstance(ret, (tuple, list)):
+                        wrapped = [
+                            TangentTensor(t, base_point=migrated_base, manifold=manifold)
+                            if isinstance(t, torch.Tensor) and not (isinstance(t, (ManifoldTensor, TangentTensor)) and hasattr(t, 'manifold'))
+                            else t
+                            for t in ret
+                        ]
+                        return type(ret)(wrapped)
+                    
+                    # Handle single tensor output
+                    if isinstance(ret, torch.Tensor) and not (isinstance(ret, (ManifoldTensor, TangentTensor)) and hasattr(ret, 'manifold')):
+                        return TangentTensor(ret, base_point=migrated_base, manifold=manifold)
                     break
         
         return ret
@@ -375,10 +416,16 @@ class TangentTensor(torch.Tensor):
         Parallel transport to tangent space at q.
         
         Args:
-            q: Destination point on manifold
+            q: Destination point on manifold (plain Tensor or ManifoldTensor)
         
         Returns:
             Transported tangent vector at q
+        
+        Note:
+            The returned TangentTensor stores `q` directly as its base_point
+            without projection or validation. If `q` is a ManifoldTensor,
+            that type is preserved. Callers are responsible for ensuring
+            `q` is a valid point on the manifold.
         """
         # Use as_subclass for view-like conversion without copies or grad surprises
         v_data = self.as_subclass(torch.Tensor)
