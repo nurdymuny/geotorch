@@ -334,12 +334,17 @@ class TangentTensor(torch.Tensor):
         'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16',
     }
     
+    # Operations that change device/dtype and require base_point migration
+    _DEVICE_DTYPE_OPS = {'to', 'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16'}
+    
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """
         Handle torch function calls to preserve TangentTensor type.
         
         Structure-preserving operations maintain base_point and manifold metadata.
+        Device/dtype operations (to, cuda, cpu, etc.) also migrate the base_point
+        to avoid device mismatches during parallel transport.
         """
         if kwargs is None:
             kwargs = {}
@@ -354,7 +359,13 @@ class TangentTensor(torch.Tensor):
                     if isinstance(ret, torch.Tensor):
                         # Result may be TangentTensor without attrs, or plain Tensor
                         if not hasattr(ret, 'manifold'):
-                            return TangentTensor(ret, base_point=arg.base_point, manifold=arg.manifold)
+                            # For device/dtype ops, also migrate base_point
+                            if func_name in cls._DEVICE_DTYPE_OPS:
+                                # Apply same operation to base_point
+                                migrated_base = func(arg.base_point, *args[1:], **kwargs)
+                            else:
+                                migrated_base = arg.base_point
+                            return TangentTensor(ret, base_point=migrated_base, manifold=arg.manifold)
                     break
         
         return ret
