@@ -11,6 +11,9 @@ class Manifold(ABC):
     
     A Riemannian manifold (M, g) is a smooth space equipped with a metric tensor g
     that defines distances, angles, and geodesics (shortest paths).
+    
+    Manifolds support structural equality: two manifold instances are equal if they
+    have the same type and configuration (dimension, curvature, etc.).
     """
     
     @property
@@ -18,6 +21,32 @@ class Manifold(ABC):
     def dim(self) -> int:
         """Intrinsic dimension of the manifold."""
         ...
+    
+    def _config_tuple(self) -> tuple:
+        """
+        Return a tuple of configuration values for equality comparison.
+        
+        Subclasses should override to include all parameters that define
+        the manifold (dimension, curvature, etc.).
+        
+        Returns:
+            Tuple of (type_name, param1, param2, ...)
+        """
+        return (self.__class__.__name__, self.dim)
+    
+    def __eq__(self, other) -> bool:
+        """
+        Structural equality for manifolds.
+        
+        Two manifolds are equal if they have the same type and configuration.
+        """
+        if not isinstance(other, Manifold):
+            return False
+        return self._config_tuple() == other._config_tuple()
+    
+    def __hash__(self) -> int:
+        """Hash based on configuration for use in sets/dicts."""
+        return hash(self._config_tuple())
     
     @abstractmethod
     def exp(self, p: Tensor, v: Tensor) -> Tensor:

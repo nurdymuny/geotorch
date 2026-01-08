@@ -39,6 +39,10 @@ class Sphere(Manifold):
         self._dim = n - 1
         self._eps = 1e-7  # For numerical stability
     
+    def _config_tuple(self) -> tuple:
+        """Configuration tuple for equality comparison."""
+        return (self.__class__.__name__, self._ambient_dim)
+    
     @property
     def dim(self) -> int:
         """Intrinsic dimension of the sphere (n-1 for S^{n-1})."""

@@ -23,6 +23,10 @@ class Euclidean(Manifold):
     def __init__(self, n: int):
         self.n = n
     
+    def _config_tuple(self) -> tuple:
+        """Configuration tuple for equality comparison."""
+        return (self.__class__.__name__, self.n)
+    
     @property
     def dim(self) -> int:
         """Intrinsic dimension of the manifold."""
