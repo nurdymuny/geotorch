@@ -95,23 +95,47 @@ class ManifoldTensor(torch.Tensor):
             return torch.Tensor.__sub__(other, self)
         return torch.Tensor.__rsub__(self, other)
     
+    # Operations that preserve manifold structure
+    _METADATA_PRESERVING_OPS = {
+        'clone', 'detach', 'to', 'contiguous', 'requires_grad_',
+        'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16',
+    }
+    
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """
         Handle torch function calls to preserve ManifoldTensor type.
+        
+        Structure-preserving operations (clone, detach, to, etc.) maintain
+        manifold metadata. Algebraic operations (add, mul, etc.) intentionally
+        drop metadata since they don't preserve manifold membership.
         """
         if kwargs is None:
             kwargs = {}
         
-        # For most operations, fall back to standard Tensor behavior
-        # This loses the manifold structure, which is intentional for operations
-        # that don't preserve the manifold (like addition, multiplication, etc.)
         ret = super().__torch_function__(func, types, args, kwargs)
+        
+        # Preserve manifold metadata for structure-preserving ops
+        func_name = getattr(func, '__name__', '')
+        if func_name in cls._METADATA_PRESERVING_OPS:
+            # Find the source ManifoldTensor to get manifold from
+            for arg in args:
+                if isinstance(arg, ManifoldTensor) and hasattr(arg, 'manifold'):
+                    if isinstance(ret, torch.Tensor):
+                        # Result may be ManifoldTensor without manifold attr, or plain Tensor
+                        if not hasattr(ret, 'manifold'):
+                            return ManifoldTensor(ret, manifold=arg.manifold)
+                    break
+        
         return ret
     
     def project_(self) -> 'ManifoldTensor':
         """
         Project onto manifold in-place.
+        
+        Warning:
+            This operation is non-differentiable. Gradients will not flow
+            through the projection. Use for hard manifold constraints only.
         
         Returns:
             Self after projection
@@ -124,6 +148,21 @@ class ManifoldTensor(torch.Tensor):
         torch.Tensor.copy_(self, projected)
         return self
     
+    def project(self) -> 'ManifoldTensor':
+        """
+        Return a new tensor projected onto the manifold.
+        
+        Unlike project_(), this returns a new tensor rather than modifying
+        in-place. The projection operation is generally non-differentiable
+        (gradients may be zero or undefined at non-smooth points).
+        
+        Returns:
+            New ManifoldTensor on the manifold
+        """
+        p_data = self.as_subclass(torch.Tensor)
+        projected = self.manifold.project(p_data)
+        return ManifoldTensor(projected, manifold=self.manifold)
+    
     def exp(self, v: Tensor) -> 'ManifoldTensor':
         """
         Move along geodesic with velocity v.
@@ -134,9 +173,9 @@ class ManifoldTensor(torch.Tensor):
         Returns:
             New point on manifold after exponential map
         """
-        # Convert to plain tensors to avoid subclass dispatch issues
-        p_data = torch.Tensor(self)
-        v_data = torch.Tensor(v) if isinstance(v, (ManifoldTensor, TangentTensor)) else v
+        # Use as_subclass for view-like conversion without copies or grad surprises
+        p_data = self.as_subclass(torch.Tensor)
+        v_data = v.as_subclass(torch.Tensor) if isinstance(v, (ManifoldTensor, TangentTensor)) else v
         result = self.manifold.exp(p_data, v_data)
         return ManifoldTensor(result, manifold=self.manifold)
     
@@ -289,16 +328,35 @@ class TangentTensor(torch.Tensor):
             return torch.Tensor.__sub__(other, self)
         return torch.Tensor.__rsub__(self, other)
     
+    # Operations that preserve tangent structure
+    _METADATA_PRESERVING_OPS = {
+        'clone', 'detach', 'to', 'contiguous', 'requires_grad_',
+        'cpu', 'cuda', 'float', 'double', 'half', 'bfloat16',
+    }
+    
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """
         Handle torch function calls to preserve TangentTensor type.
+        
+        Structure-preserving operations maintain base_point and manifold metadata.
         """
         if kwargs is None:
             kwargs = {}
         
-        # For most operations, fall back to standard Tensor behavior
         ret = super().__torch_function__(func, types, args, kwargs)
+        
+        # Preserve metadata for structure-preserving ops
+        func_name = getattr(func, '__name__', '')
+        if func_name in cls._METADATA_PRESERVING_OPS:
+            for arg in args:
+                if isinstance(arg, TangentTensor) and hasattr(arg, 'manifold'):
+                    if isinstance(ret, torch.Tensor):
+                        # Result may be TangentTensor without attrs, or plain Tensor
+                        if not hasattr(ret, 'manifold'):
+                            return TangentTensor(ret, base_point=arg.base_point, manifold=arg.manifold)
+                    break
+        
         return ret
     
     def parallel_transport(self, q: Tensor) -> 'TangentTensor':
@@ -311,10 +369,10 @@ class TangentTensor(torch.Tensor):
         Returns:
             Transported tangent vector at q
         """
-        # Convert to plain tensors to avoid subclass dispatch issues
-        v_data = torch.Tensor(self)
-        p_data = torch.Tensor(self.base_point) if isinstance(self.base_point, (ManifoldTensor, TangentTensor)) else self.base_point
-        q_data = torch.Tensor(q) if isinstance(q, (ManifoldTensor, TangentTensor)) else q
+        # Use as_subclass for view-like conversion without copies or grad surprises
+        v_data = self.as_subclass(torch.Tensor)
+        p_data = self.base_point.as_subclass(torch.Tensor) if isinstance(self.base_point, (ManifoldTensor, TangentTensor)) else self.base_point
+        q_data = q.as_subclass(torch.Tensor) if isinstance(q, (ManifoldTensor, TangentTensor)) else q
         transported = self.manifold.parallel_transport(v_data, p_data, q_data)
         return TangentTensor(transported, base_point=q, manifold=self.manifold)
     

@@ -55,6 +55,10 @@ class Hyperbolic(Manifold):
         self.eps = 1e-7
         self.max_norm = 1.0 - 1e-5  # Stay away from boundary
     
+    def _config_tuple(self) -> tuple:
+        """Configuration tuple for equality comparison."""
+        return (self.__class__.__name__, self.n, self.model, self.curvature)
+    
     @property
     def dim(self) -> int:
         """Intrinsic dimension of the manifold."""
