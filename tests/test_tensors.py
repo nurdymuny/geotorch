@@ -232,3 +232,183 @@ class TestTensorIntegration:
         
         # Transported vector should be at q
         assert torch.allclose(wt_transported.base_point, q, atol=1e-6)
+
+
+class TestMetadataPreservation:
+    """Tests for metadata preservation through torch operations."""
+    
+    def test_clone_preserves_manifold(self):
+        """Test that clone preserves ManifoldTensor metadata."""
+        S = Sphere(64)
+        p = ManifoldTensor(S.random_point(), manifold=S)
+        
+        p_cloned = p.clone()
+        
+        assert isinstance(p_cloned, ManifoldTensor)
+        assert p_cloned.manifold == S
+    
+    def test_detach_preserves_manifold(self):
+        """Test that detach preserves ManifoldTensor metadata."""
+        S = Sphere(64)
+        p = ManifoldTensor(S.random_point(), manifold=S)
+        p.requires_grad_(True)
+        
+        p_detached = p.detach()
+        
+        assert isinstance(p_detached, ManifoldTensor)
+        assert p_detached.manifold == S
+        assert not p_detached.requires_grad
+    
+    def test_to_preserves_manifold(self):
+        """Test that .to() preserves ManifoldTensor metadata."""
+        S = Sphere(64)
+        p = ManifoldTensor(S.random_point(), manifold=S)
+        
+        p_double = p.to(torch.float64)
+        
+        assert isinstance(p_double, ManifoldTensor)
+        assert p_double.manifold == S
+        assert p_double.dtype == torch.float64
+    
+    def test_indexing_preserves_manifold(self):
+        """Test that indexing preserves ManifoldTensor metadata."""
+        S = Sphere(64)
+        # Create batch of points
+        batch = torch.randn(10, 64)
+        batch = batch / batch.norm(dim=-1, keepdim=True)  # Normalize to sphere
+        mt = ManifoldTensor(batch, manifold=S)
+        
+        # Index single element
+        single = mt[0]
+        assert isinstance(single, ManifoldTensor)
+        assert single.manifold == S
+        
+        # Slice subset
+        subset = mt[2:5]
+        assert isinstance(subset, ManifoldTensor)
+        assert subset.manifold == S
+        assert subset.shape == (3, 64)
+    
+    def test_tangent_clone_preserves_metadata(self):
+        """Test that clone preserves TangentTensor metadata."""
+        S = Sphere(64)
+        p = S.random_point()
+        v = S.random_tangent(p)
+        tt = TangentTensor(v, base_point=p, manifold=S)
+        
+        tt_cloned = tt.clone()
+        
+        assert isinstance(tt_cloned, TangentTensor)
+        assert tt_cloned.manifold == S
+        assert torch.allclose(tt_cloned.base_point, p, atol=1e-6)
+    
+    def test_tangent_to_migrates_base_point(self):
+        """Test that .to() migrates base_point to same dtype."""
+        S = Sphere(64)
+        p = S.random_point()
+        v = S.random_tangent(p)
+        tt = TangentTensor(v, base_point=p, manifold=S)
+        
+        tt_double = tt.to(torch.float64)
+        
+        assert isinstance(tt_double, TangentTensor)
+        assert tt_double.manifold == S
+        assert tt_double.dtype == torch.float64
+        # Base point should also be migrated
+        assert tt_double.base_point.dtype == torch.float64
+    
+    def test_tangent_to_with_manifold_tensor_base(self):
+        """Test that .to() preserves ManifoldTensor metadata on base_point."""
+        S = Sphere(64)
+        p = ManifoldTensor(S.random_point(), manifold=S)
+        v = S.random_tangent(p)
+        tt = TangentTensor(v, base_point=p, manifold=S)
+        
+        tt_double = tt.to(torch.float64)
+        
+        assert isinstance(tt_double, TangentTensor)
+        assert tt_double.dtype == torch.float64
+        # Base point should be migrated AND preserve manifold
+        assert tt_double.base_point.dtype == torch.float64
+        assert isinstance(tt_double.base_point, ManifoldTensor)
+        assert tt_double.base_point.manifold == S
+    
+    def test_tangent_indexing_preserves_metadata(self):
+        """Test that indexing preserves TangentTensor metadata."""
+        S = Sphere(64)
+        p = S.random_point()
+        # Create batch of tangent vectors
+        batch = torch.randn(10, 64)
+        # Project to tangent space (orthogonal to p)
+        batch = batch - torch.outer(batch @ p, p)
+        tt = TangentTensor(batch, base_point=p, manifold=S)
+        
+        # Index single element
+        single = tt[0]
+        assert isinstance(single, TangentTensor)
+        assert single.manifold == S
+        assert torch.allclose(single.base_point, p, atol=1e-6)
+        
+        # Slice subset
+        subset = tt[2:5]
+        assert isinstance(subset, TangentTensor)
+        assert subset.manifold == S
+        assert subset.shape == (3, 64)
+    
+    def test_unbind_preserves_manifold_tensor(self):
+        """Test that torch.unbind preserves ManifoldTensor metadata on each element."""
+        S = Sphere(64)
+        # Create batch of points
+        batch = torch.randn(5, 64)
+        batch = batch / batch.norm(dim=-1, keepdim=True)
+        mt = ManifoldTensor(batch, manifold=S)
+        
+        # Unbind along batch dimension
+        elements = torch.unbind(mt, dim=0)
+        
+        assert isinstance(elements, tuple)
+        assert len(elements) == 5
+        for elem in elements:
+            assert isinstance(elem, ManifoldTensor), f"Expected ManifoldTensor, got {type(elem)}"
+            assert elem.manifold == S
+            assert elem.shape == (64,)
+    
+    def test_chunk_preserves_tangent_tensor(self):
+        """Test that torch.chunk preserves TangentTensor metadata on each chunk."""
+        S = Sphere(64)
+        p = S.random_point()
+        # Create batch of tangent vectors
+        batch = torch.randn(6, 64)
+        batch = batch - torch.outer(batch @ p, p)  # Project to tangent space
+        tt = TangentTensor(batch, base_point=p, manifold=S)
+        
+        # Chunk into 3 parts
+        chunks = torch.chunk(tt, chunks=3, dim=0)
+        
+        assert isinstance(chunks, tuple)
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert isinstance(chunk, TangentTensor), f"Expected TangentTensor, got {type(chunk)}"
+            assert chunk.manifold == S
+            assert torch.allclose(chunk.base_point, p, atol=1e-6)
+            assert chunk.shape == (2, 64)
+    
+    def test_tangent_detach_also_detaches_base_point(self):
+        """Test that detach() on TangentTensor also detaches base_point."""
+        S = Sphere(64)
+        p = S.random_point()
+        p.requires_grad_(True)
+        v = S.random_tangent(p.detach())  # Use detached for tangent generation
+        tt = TangentTensor(v, base_point=p, manifold=S)
+        tt.requires_grad_(True)
+        
+        # Base point has grad before detach
+        assert tt.base_point.requires_grad
+        
+        tt_detached = tt.detach()
+        
+        assert isinstance(tt_detached, TangentTensor)
+        assert not tt_detached.requires_grad
+        # Base point should also be detached
+        assert not tt_detached.base_point.requires_grad
+
